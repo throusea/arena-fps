@@ -71,6 +71,8 @@ void ANetCharacter::MoveInput(const FInputActionValue& Value)
 {
 	// get the Vector2D move axis
 	FVector2D MovementVector = Value.Get<FVector2D>();
+	
+	GEngine->AddOnScreenDebugMessage(4, 2.0f, FColor::Green, FString::Printf(TEXT("Move Input Value: %.2f %.2f"), MovementVector.X, MovementVector.Y));
 
 	// pass the axis values to the move input
 	DoMove(MovementVector.X, MovementVector.Y);
@@ -81,6 +83,8 @@ void ANetCharacter::LookInput(const FInputActionValue& Value)
 {
 	// get the Vector2D look axis
 	FVector2D LookAxisVector = Value.Get<FVector2D>();
+	
+	GEngine->AddOnScreenDebugMessage(5, 2.0f, FColor::Blue, FString::Format(TEXT("Look Input Value: {0} {1}"), {LookAxisVector.X, LookAxisVector.Y}));
 
 	// pass the axis values to the aim input
 	DoAim(LookAxisVector.X, LookAxisVector.Y);
@@ -109,12 +113,14 @@ void ANetCharacter::DoMove(float Right, float Forward)
 
 void ANetCharacter::DoJumpStart()
 {
+	GEngine->AddOnScreenDebugMessage(6, 2.0f, FColor::Green, TEXT("Jump Start"));
 	// pass Jump to the character
 	Jump();
 }
 
 void ANetCharacter::DoJumpEnd()
 {
+	GEngine->AddOnScreenDebugMessage(6, 2.0f, FColor::Red, TEXT("Jump End"));
 	// pass StopJumping to the character
 	StopJumping();
 }
