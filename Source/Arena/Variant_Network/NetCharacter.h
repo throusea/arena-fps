@@ -11,6 +11,7 @@ class UInputComponent;
 class USkeletalMeshComponent;
 class UCameraComponent;
 class UInputAction;
+class ANetRifle;
 struct FInputActionValue;
 
 // DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -49,6 +50,18 @@ protected:
 	UPROPERTY(EditAnywhere, Category ="Input")
 	class UInputAction* MouseLookAction;
 
+	/** Fire rifle input action */
+	UPROPERTY(EditAnywhere, Category ="Input")
+	UInputAction* FireAction;
+
+	/** Rifle class spawned for this character */
+	UPROPERTY(EditAnywhere, Category="Weapon")
+	TSubclassOf<ANetRifle> RifleClass;
+
+	/** Rifle currently owned by this character */
+	UPROPERTY(VisibleInstanceOnly, Category="Weapon")
+	TObjectPtr<ANetRifle> CurrentRifle;
+
 public:
 	ANetCharacter();
 
@@ -78,9 +91,20 @@ protected:
 
 protected:
 
+	/** Gameplay initialization */
+	virtual void BeginPlay() override;
+
+	/** Gameplay cleanup */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
 
+	/** Starts firing the equipped rifle */
+	void DoStartFiring();
+
+	/** Stops firing the equipped rifle */
+	void DoStopFiring();
 
 public:
 
