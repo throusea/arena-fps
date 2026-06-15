@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "skills": {
+    "ue-cpp-foundations": {
+      "source": "quodsoler/unreal-engine-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ue-cpp-foundations/SKILL.md",
+      "computedHash": "3c365f546b86b9f87bf663f704c076f69066afbe63ce8f37c38b78a45c81cb80"
+    },
+    "ue-gameplay-abilities": {
+      "source": "quodsoler/unreal-engine-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ue-gameplay-abilities/SKILL.md",
+      "computedHash": "6879c44765c1ee1f212264fbcc7f7ce859b63101d5f0306563e60f35259e69b2"
+    },
+    "ue-module-build-system": {
+      "source": "quodsoler/unreal-engine-skills",
+      "sourceType": "github",
+      "skillPath": "skills/ue-module-build-system/SKILL.md",
+      "computedHash": "45d7b0c2f215a0a21fa5dbf3a011fac3642370dab9c42a758d7939240ffea3bd"
+    }
+  }
+}
