@@ -4,13 +4,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/GameState.h"
-#include "NetGameStateBase.generated.h"
+#include "NetGameState.generated.h"
 
 /**
  *
  */
 UCLASS()
-class ARENA_API ANetGameStateBase : public AGameState
+class ARENA_API ANetGameState : public AGameState
 {
 	GENERATED_BODY()
 };

@@ -3,14 +3,14 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/GameModeBase.h"
+#include "GameFramework/GameMode.h"
 #include "NetGameMode.generated.h"
 
 /**
  *  Simple GameMode for a first person game
  */
 UCLASS(abstract)
-class ANetGameMode : public AGameModeBase
+class ANetGameMode : public AGameMode
 {
 	GENERATED_BODY()
 
