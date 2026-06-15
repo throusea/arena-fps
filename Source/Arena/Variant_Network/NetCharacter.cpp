@@ -9,6 +9,7 @@
 #include "InputActionValue.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Arena.h"
+#include "Weapons/NetRifle.h"
 
 ANetCharacter::ANetCharacter()
 {
@@ -42,6 +43,39 @@ ANetCharacter::ANetCharacter()
 	// Configure character movement
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
 	GetCharacterMovement()->AirControl = 0.5f;
+
+	RifleClass = ANetRifle::StaticClass();
+}
+
+void ANetCharacter::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (RifleClass)
+	{
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.Owner = this;
+		SpawnParams.Instigator = this;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+		CurrentRifle = GetWorld()->SpawnActor<ANetRifle>(RifleClass, GetActorTransform(), SpawnParams);
+		if (CurrentRifle)
+		{
+			const FAttachmentTransformRules AttachmentRule(EAttachmentRule::SnapToTarget, false);
+			CurrentRifle->AttachToActor(this, AttachmentRule);
+		}
+	}
+}
+
+void ANetCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (IsValid(CurrentRifle))
+	{
+		CurrentRifle->Destroy();
+		CurrentRifle = nullptr;
+	}
+
+	Super::EndPlay(EndPlayReason);
 }
 
 void ANetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -59,6 +93,10 @@ void ANetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		// Looking/Aiming
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ANetCharacter::LookInput);
 		EnhancedInputComponent->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &ANetCharacter::LookInput);
+
+		// Firing
+		EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Started, this, &ANetCharacter::DoStartFiring);
+		EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &ANetCharacter::DoStopFiring);
 	}
 	else
 	{
@@ -71,6 +109,8 @@ void ANetCharacter::MoveInput(const FInputActionValue& Value)
 {
 	// get the Vector2D move axis
 	FVector2D MovementVector = Value.Get<FVector2D>();
+	
+	GEngine->AddOnScreenDebugMessage(4, 2.0f, FColor::Green, FString::Printf(TEXT("Move Input Value: %.2f %.2f"), MovementVector.X, MovementVector.Y));
 
 	// pass the axis values to the move input
 	DoMove(MovementVector.X, MovementVector.Y);
@@ -81,6 +121,8 @@ void ANetCharacter::LookInput(const FInputActionValue& Value)
 {
 	// get the Vector2D look axis
 	FVector2D LookAxisVector = Value.Get<FVector2D>();
+	
+	GEngine->AddOnScreenDebugMessage(5, 2.0f, FColor::Blue, FString::Format(TEXT("Look Input Value: {0} {1}"), {LookAxisVector.X, LookAxisVector.Y}));
 
 	// pass the axis values to the aim input
 	DoAim(LookAxisVector.X, LookAxisVector.Y);
@@ -109,12 +151,32 @@ void ANetCharacter::DoMove(float Right, float Forward)
 
 void ANetCharacter::DoJumpStart()
 {
+	GEngine->AddOnScreenDebugMessage(6, 2.0f, FColor::Green, TEXT("Jump Start"));
 	// pass Jump to the character
 	Jump();
 }
 
 void ANetCharacter::DoJumpEnd()
 {
+	GEngine->AddOnScreenDebugMessage(6, 2.0f, FColor::Red, TEXT("Jump End"));
 	// pass StopJumping to the character
 	StopJumping();
+}
+
+void ANetCharacter::DoStartFiring()
+{
+	if (CurrentRifle)
+	{
+		GEngine->AddOnScreenDebugMessage(8, 2.0f, FColor::Green, TEXT("Start Firing"));
+		CurrentRifle->StartFiring();
+	}
+}
+
+void ANetCharacter::DoStopFiring()
+{
+	if (CurrentRifle)
+	{
+		GEngine->AddOnScreenDebugMessage(8, 2.0f, FColor::Red, TEXT("End Firing"));
+		CurrentRifle->StopFiring();
+	}
 }
