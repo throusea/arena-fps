@@ -6,11 +6,15 @@
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
+#include "GameFramework/Controller.h"
+#include "Kismet/GameplayStatics.h"
+#include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 
 ANetRifle::ANetRifle()
 {
 	PrimaryActorTick.bCanEverTick = false;
+	bReplicates = true;
 }
 
 void ANetRifle::BeginPlay()
@@ -18,6 +22,13 @@ void ANetRifle::BeginPlay()
 	Super::BeginPlay();
 
 	OwningCharacter = Cast<ANetCharacter>(GetOwner());
+}
+
+void ANetRifle::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ANetRifle, LastHitResult);
 }
 
 void ANetRifle::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -30,18 +41,18 @@ void ANetRifle::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-void ANetRifle::StartFiring()
+void ANetRifle::StartFiringOnServer()
 {
 	bWantsToFire = true;
-	Fire();
+	FireOnServer();
 }
 
-void ANetRifle::StopFiring()
+void ANetRifle::StopFiringOnServer()
 {
 	bWantsToFire = false;
 }
 
-void ANetRifle::Fire()
+void ANetRifle::FireOnServer()
 {
 	if (!bWantsToFire || !bCanFire)
 	{
@@ -51,16 +62,7 @@ void ANetRifle::Fire()
 	bCanFire = false;
 	LastHitResult = FHitResult();
 
-	const bool bHit = TraceFromCamera(LastHitResult);
-	const FVector TraceEnd = bHit ? LastHitResult.ImpactPoint : LastHitResult.TraceEnd;
-
-	if (GEngine)
-	{
-		const FString HitActorName = bHit ? GetNameSafe(LastHitResult.GetActor()) : TEXT("None");
-		GEngine->AddOnScreenDebugMessage(7, 1.0f, bHit ? FColor::Red : FColor::Yellow, FString::Printf(TEXT("Rifle fired. Hit: %s"), *HitActorName));
-	}
-
-	DrawDebugLine(GetWorld(), LastHitResult.TraceStart, TraceEnd, bHit ? FColor::Red : FColor::Yellow, false, 1.0f, 0, 1.0f);
+	FireAuthoritativeShot();
 
 	GetWorld()->GetTimerManager().SetTimer(FireCooldownTimer, this, &ANetRifle::FireCooldownExpired, FireCooldown, false);
 }
@@ -71,7 +73,7 @@ void ANetRifle::FireCooldownExpired()
 
 	if (bWantsToFire)
 	{
-		Fire();
+		FireOnServer();
 	}
 }
 
@@ -82,14 +84,25 @@ bool ANetRifle::TraceFromCamera(FHitResult& OutHitResult) const
 		return false;
 	}
 
-	const UCameraComponent* Camera = OwningCharacter->GetFirstPersonCameraComponent();
-	if (!Camera)
+	FVector TraceStart;
+	FRotator TraceRotation;
+	if (AController* Controller = OwningCharacter->GetController())
 	{
-		return false;
+		Controller->GetPlayerViewPoint(TraceStart, TraceRotation);
+	}
+	else
+	{
+		const UCameraComponent* Camera = OwningCharacter->GetFirstPersonCameraComponent();
+		if (!Camera)
+		{
+			return false;
+		}
+
+		TraceStart = Camera->GetComponentLocation();
+		TraceRotation = Camera->GetComponentRotation();
 	}
 
-	const FVector TraceStart = Camera->GetComponentLocation();
-	const FVector TraceEnd = TraceStart + (Camera->GetForwardVector() * TraceDistance);
+	const FVector TraceEnd = TraceStart + (TraceRotation.Vector() * TraceDistance);
 
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NetRifleTrace), true, OwningCharacter);
 	QueryParams.AddIgnoredActor(this);
@@ -100,4 +113,29 @@ bool ANetRifle::TraceFromCamera(FHitResult& OutHitResult) const
 	OutHitResult.TraceEnd = TraceEnd;
 
 	return bHit;
+}
+
+void ANetRifle::FireAuthoritativeShot()
+{
+	LastHitResult = FHitResult();
+
+	const bool bHit = TraceFromCamera(LastHitResult);
+	const FVector TraceEnd = bHit ? LastHitResult.ImpactPoint : LastHitResult.TraceEnd;
+
+	if (bHit)
+	{
+		if (AActor* HitActor = LastHitResult.GetActor())
+		{
+			AController* InstigatorController = OwningCharacter ? OwningCharacter->GetController() : nullptr;
+			UGameplayStatics::ApplyDamage(HitActor, Damage, InstigatorController, this, nullptr);
+		}
+	}
+
+	if (GEngine)
+	{
+		const FString HitActorName = bHit ? GetNameSafe(LastHitResult.GetActor()) : TEXT("None");
+		GEngine->AddOnScreenDebugMessage(7, 1.0f, bHit ? FColor::Red : FColor::Yellow, FString::Printf(TEXT("Server rifle fired. Hit: %s"), *HitActorName));
+	}
+
+	DrawDebugLine(GetWorld(), LastHitResult.TraceStart, TraceEnd, bHit ? FColor::Red : FColor::Yellow, false, DebugTraceDuration, 0, 1.0f);
 }

@@ -9,6 +9,8 @@
 #include "InputActionValue.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Arena.h"
+#include "Components/NetHealthComponent.h"
+#include "Net/UnrealNetwork.h"
 #include "Weapons/NetRifle.h"
 
 ANetCharacter::ANetCharacter()
@@ -39,10 +41,13 @@ ANetCharacter::ANetCharacter()
 	GetMesh()->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::WorldSpaceRepresentation;
 
 	GetCapsuleComponent()->SetCapsuleSize(34.0f, 96.0f);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_WeaponTrace, ECR_Block);
 
 	// Configure character movement
 	GetCharacterMovement()->BrakingDecelerationFalling = 1500.0f;
 	GetCharacterMovement()->AirControl = 0.5f;
+
+	HealthComponent = CreateDefaultSubobject<UNetHealthComponent>(TEXT("Health Component"));
 
 	RifleClass = ANetRifle::StaticClass();
 }
@@ -51,7 +56,12 @@ void ANetCharacter::BeginPlay()
 {
 	Super::BeginPlay();
 
-	if (RifleClass)
+	if (HealthComponent)
+	{
+		HealthComponent->OnDeath.AddDynamic(this, &ANetCharacter::OnDeath);
+	}
+
+	if (HasAuthority() && RifleClass)
 	{
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.Owner = this;
@@ -76,6 +86,44 @@ void ANetCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 
 	Super::EndPlay(EndPlayReason);
+}
+
+void ANetCharacter::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController);
+
+	FString LocalRoleStr = StaticEnum<ENetRole>()->GetNameStringByValue(GetLocalRole());
+	FString RemoteRoleStr = StaticEnum<ENetRole>()->GetNameStringByValue(GetRemoteRole());
+
+	const FString Msg = FString::Printf(
+		TEXT("Actor=%s LocalRole=%s, RemoteRole=%s, HasAuthority=%d, IsLocallyControlled=%d"),
+		*GetNameSafe(this),
+		*LocalRoleStr,
+		*RemoteRoleStr,
+		HasAuthority() ? 1 : 0,
+		IsLocallyControlled() ? 1 : 0
+	);
+
+	UE_LOG(LogTemp, Warning, TEXT("%s"), *Msg);
+}
+
+void ANetCharacter::OnRep_Controller()
+{
+	Super::OnRep_Controller();
+
+	FString LocalRoleStr = StaticEnum<ENetRole>()->GetNameStringByValue(GetLocalRole());
+	FString RemoteRoleStr = StaticEnum<ENetRole>()->GetNameStringByValue(GetRemoteRole());
+
+	const FString Msg = FString::Printf(
+		TEXT("Actor=%s LocalRole=%s, RemoteRole=%s, HasAuthority=%d, IsLocallyControlled=%d"),
+		*GetNameSafe(this),
+		*LocalRoleStr,
+		*RemoteRoleStr,
+		HasAuthority() ? 1 : 0,
+		IsLocallyControlled() ? 1 : 0
+	);
+
+	UE_LOG(LogTemp, Warning, TEXT("%s"), *Msg);
 }
 
 void ANetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -107,6 +155,11 @@ void ANetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 
 void ANetCharacter::MoveInput(const FInputActionValue& Value)
 {
+	if (IsDead())
+	{
+		return;
+	}
+
 	// get the Vector2D move axis
 	FVector2D MovementVector = Value.Get<FVector2D>();
 	
@@ -119,6 +172,11 @@ void ANetCharacter::MoveInput(const FInputActionValue& Value)
 
 void ANetCharacter::LookInput(const FInputActionValue& Value)
 {
+	if (IsDead())
+	{
+		return;
+	}
+
 	// get the Vector2D look axis
 	FVector2D LookAxisVector = Value.Get<FVector2D>();
 	
@@ -151,6 +209,11 @@ void ANetCharacter::DoMove(float Right, float Forward)
 
 void ANetCharacter::DoJumpStart()
 {
+	if (IsDead())
+	{
+		return;
+	}
+
 	GEngine->AddOnScreenDebugMessage(6, 2.0f, FColor::Green, TEXT("Jump Start"));
 	// pass Jump to the character
 	Jump();
@@ -165,18 +228,89 @@ void ANetCharacter::DoJumpEnd()
 
 void ANetCharacter::DoStartFiring()
 {
-	if (CurrentRifle)
+	if (IsDead())
 	{
-		GEngine->AddOnScreenDebugMessage(8, 2.0f, FColor::Green, TEXT("Start Firing"));
-		CurrentRifle->StartFiring();
+		return;
 	}
+
+	GEngine->AddOnScreenDebugMessage(8, 2.0f, FColor::Green, TEXT("Start Firing"));
+
+	if (HasAuthority())
+	{
+		HandleStartFiring();
+	}
+	else
+	{
+		ServerStartFiring();
+	}
+}
+
+void ANetCharacter::OnDeath()
+{
+	DoStopFiring();
+	GetCharacterMovement()->DisableMovement();
+}
+
+void ANetCharacter::ServerStartFiring_Implementation()
+{
+	HandleStartFiring();
+}
+
+void ANetCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+	DOREPLIFETIME(ANetCharacter, CurrentRifle);
+}
+
+void ANetCharacter::ServerStopFiring_Implementation()
+{
+	HandleStopFiring();
+}
+
+void ANetCharacter::HandleStopFiring()
+{
+	if (!IsDead() && CurrentRifle)
+	{
+		CurrentRifle->StopFiringOnServer();
+	}
+}
+
+float ANetCharacter::TakeDamage(float Damage, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
+{
+	const float AppliedDamage = Super::TakeDamage(Damage, DamageEvent, EventInstigator, DamageCauser);
+
+	if (!HasAuthority() || !HealthComponent)
+	{
+		return AppliedDamage;
+	}
+
+	return HealthComponent->ApplyHealthDamage(Damage);
+}
+
+bool ANetCharacter::IsDead() const
+{
+	return HealthComponent && HealthComponent->IsDead();
 }
 
 void ANetCharacter::DoStopFiring()
 {
-	if (CurrentRifle)
+	GEngine->AddOnScreenDebugMessage(8, 2.0f, FColor::Red, TEXT("End Firing"));
+
+	if (HasAuthority())
 	{
-		GEngine->AddOnScreenDebugMessage(8, 2.0f, FColor::Red, TEXT("End Firing"));
-		CurrentRifle->StopFiring();
+		HandleStopFiring();
+	}
+	else
+	{
+		ServerStopFiring();
+	}
+}
+
+void ANetCharacter::HandleStartFiring()
+{
+	if (!IsDead() && CurrentRifle)
+	{
+		CurrentRifle->StartFiringOnServer();
 	}
 }
