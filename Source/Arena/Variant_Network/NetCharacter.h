@@ -12,6 +12,7 @@ class USkeletalMeshComponent;
 class UCameraComponent;
 class UInputAction;
 class ANetRifle;
+class UNetHealthComponent;
 struct FInputActionValue;
 
 // DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -31,6 +32,10 @@ class ANetCharacter : public ACharacter
 	/** First person camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FirstPersonCameraComponent;
+
+	/** Replicated health state */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UNetHealthComponent> HealthComponent;
 
 protected:
 
@@ -59,7 +64,7 @@ protected:
 	TSubclassOf<ANetRifle> RifleClass;
 
 	/** Rifle currently owned by this character */
-	UPROPERTY(VisibleInstanceOnly, Category="Weapon")
+	UPROPERTY(VisibleInstanceOnly, Replicated, Category="Weapon")
 	TObjectPtr<ANetRifle> CurrentRifle;
 
 public:
@@ -89,13 +94,26 @@ protected:
 	UFUNCTION(BlueprintCallable, Category="Input")
 	virtual void DoJumpEnd();
 
+	/** Called when replicated health reaches zero. */
+	UFUNCTION()
+	void OnDeath();
+
 protected:
 
 	/** Gameplay initialization */
 	virtual void BeginPlay() override;
 
+	/** Registers replicated properties. */
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 	/** Gameplay cleanup */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	/** Server Only */
+	virtual void PossessedBy(AController* NewController) override;
+
+	/** Client Only */
+	virtual void OnRep_Controller() override;
 
 	/** Set up input action bindings */
 	virtual void SetupPlayerInputComponent(UInputComponent* InputComponent) override;
@@ -108,10 +126,32 @@ protected:
 
 public:
 
+	/** Server-side start firing request from owning client. */
+	UFUNCTION(Server, Reliable)
+	void ServerStartFiring();
+
+	void HandleStartFiring();
+
+	/** Server-side stop firing request from owning client. */
+	UFUNCTION(Server, Reliable)
+	void ServerStopFiring();
+
+	void HandleStopFiring();
+
+	/** Applies incoming engine damage to the health component. */
+	virtual float TakeDamage(float Damage, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
+
 	/** Returns the first person mesh **/
 	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
 
 	/** Returns first person camera component **/
 	UCameraComponent* GetFirstPersonCameraComponent() const { return FirstPersonCameraComponent; }
+
+	/** Returns the replicated health component. */
+	UNetHealthComponent* GetHealthComponent() const { return HealthComponent; }
+
+	/** Returns true once this character has died. */
+	UFUNCTION(BlueprintPure, Category="Health")
+	bool IsDead() const;
 
 };
