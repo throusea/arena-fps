@@ -30,7 +30,13 @@ public class Arena : ModuleRules
 			"Arena/Variant_Shooter",
 			"Arena/Variant_Shooter/AI",
 			"Arena/Variant_Shooter/UI",
-			"Arena/Variant_Shooter/Weapons"
+			"Arena/Variant_Shooter/Weapons",
+			"Arena/Variant_Combat",
+			"Arena/Variant_Combat/AI",
+			"Arena/Variant_Combat/Animation",
+			"Arena/Variant_Combat/Gameplay",
+			"Arena/Variant_Combat/Interfaces",
+			"Arena/Variant_Combat/UI"
 		});
 
 		// Uncomment if you are using Slate UI
