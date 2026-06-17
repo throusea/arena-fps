@@ -7,6 +7,7 @@
 #include "NetNPC.generated.h"
 
 class UNetHealthComponent;
+class AController;
 
 /**
  * Minimal network NPC that can receive server-authoritative damage.
@@ -60,6 +61,8 @@ private:
 	/** Minimum time between attacks. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Attack", meta=(AllowPrivateAccess="true", ClampMin=0, Units="s"))
 	float AttackCooldown = 1.0f;
+
+	TWeakObjectPtr<AController> LastDamageInstigator;
 
 	float LastAttackTime = -1000.0f;
 };
