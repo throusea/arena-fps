@@ -29,6 +29,14 @@ public:
 	UFUNCTION(BlueprintPure, Category="Health")
 	bool IsDead() const;
 
+	/** Returns the attack range used by the AI controller. */
+	UFUNCTION(BlueprintPure, Category="Attack")
+	float GetAttackRange() const { return AttackRange; }
+
+	/** Attempts a server-authoritative melee attack against the target. */
+	UFUNCTION(BlueprintCallable, Category="Attack")
+	bool TryAttack(AActor* Target);
+
 protected:
 	virtual void BeginPlay() override;
 
@@ -40,4 +48,18 @@ private:
 	/** Replicated health state. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UNetHealthComponent> HealthComponent;
+
+	/** Distance at which this NPC can attack a player. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Attack", meta=(AllowPrivateAccess="true", ClampMin=0, Units="cm"))
+	float AttackRange = 180.0f;
+
+	/** Damage applied by each NPC attack. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Attack", meta=(AllowPrivateAccess="true", ClampMin=0))
+	float AttackDamage = 10.0f;
+
+	/** Minimum time between attacks. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Attack", meta=(AllowPrivateAccess="true", ClampMin=0, Units="s"))
+	float AttackCooldown = 1.0f;
+
+	float LastAttackTime = -1000.0f;
 };
