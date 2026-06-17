@@ -1,5 +1,6 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
+using System.IO;
 using UnrealBuildTool;
 
 public class Arena : ModuleRules
@@ -24,19 +25,19 @@ public class Arena : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[] { });
 
 		PublicIncludePaths.AddRange(new string[] {
-			"Arena",
-			"Arena/Variant_Horror",
-			"Arena/Variant_Horror/UI",
-			"Arena/Variant_Shooter",
-			"Arena/Variant_Shooter/AI",
-			"Arena/Variant_Shooter/UI",
-			"Arena/Variant_Shooter/Weapons",
-			"Arena/Variant_Combat",
-			"Arena/Variant_Combat/AI",
-			"Arena/Variant_Combat/Animation",
-			"Arena/Variant_Combat/Gameplay",
-			"Arena/Variant_Combat/Interfaces",
-			"Arena/Variant_Combat/UI"
+			ModuleDirectory,
+			Path.Combine(ModuleDirectory, "Variant_Horror"),
+			Path.Combine(ModuleDirectory, "Variant_Horror", "UI"),
+			Path.Combine(ModuleDirectory, "Variant_Shooter"),
+			Path.Combine(ModuleDirectory, "Variant_Shooter", "AI"),
+			Path.Combine(ModuleDirectory, "Variant_Shooter", "UI"),
+			Path.Combine(ModuleDirectory, "Variant_Shooter", "Weapons"),
+			Path.Combine(ModuleDirectory, "Variant_Combat"),
+			Path.Combine(ModuleDirectory, "Variant_Combat", "AI"),
+			Path.Combine(ModuleDirectory, "Variant_Combat", "Animation"),
+			Path.Combine(ModuleDirectory, "Variant_Combat", "Gameplay"),
+			Path.Combine(ModuleDirectory, "Variant_Combat", "Interfaces"),
+			Path.Combine(ModuleDirectory, "Variant_Combat", "UI")
 		});
 
 		// Uncomment if you are using Slate UI
