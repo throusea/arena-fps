@@ -22,6 +22,13 @@ void ANetRifle::BeginPlay()
 	Super::BeginPlay();
 
 	OwningCharacter = Cast<ANetCharacter>(GetOwner());
+
+	if (HasAuthority())
+	{
+		CurrentAmmo = MagazineSize;
+	}
+
+	BroadcastAmmoChanged();
 }
 
 void ANetRifle::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -29,6 +36,8 @@ void ANetRifle::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
 	DOREPLIFETIME(ANetRifle, LastHitResult);
+	DOREPLIFETIME(ANetRifle, MagazineSize);
+	DOREPLIFETIME(ANetRifle, CurrentAmmo);
 }
 
 void ANetRifle::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -54,7 +63,7 @@ void ANetRifle::StopFiringOnServer()
 
 void ANetRifle::FireOnServer()
 {
-	if (!bWantsToFire || !bCanFire)
+	if (!bWantsToFire || !bCanFire || (bConsumeAmmo && CurrentAmmo <= 0))
 	{
 		return;
 	}
@@ -63,6 +72,11 @@ void ANetRifle::FireOnServer()
 	LastHitResult = FHitResult();
 
 	FireAuthoritativeShot();
+	if (bConsumeAmmo)
+	{
+		CurrentAmmo = FMath::Max(0, CurrentAmmo - 1);
+		BroadcastAmmoChanged();
+	}
 
 	GetWorld()->GetTimerManager().SetTimer(FireCooldownTimer, this, &ANetRifle::FireCooldownExpired, FireCooldown, false);
 }
@@ -138,4 +152,14 @@ void ANetRifle::FireAuthoritativeShot()
 	}
 
 	DrawDebugLine(GetWorld(), LastHitResult.TraceStart, TraceEnd, bHit ? FColor::Red : FColor::Yellow, false, DebugTraceDuration, 0, 1.0f);
+}
+
+void ANetRifle::OnRep_CurrentAmmo()
+{
+	BroadcastAmmoChanged();
+}
+
+void ANetRifle::BroadcastAmmoChanged()
+{
+	OnAmmoChanged.Broadcast(CurrentAmmo, MagazineSize);
 }
