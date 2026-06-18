@@ -9,6 +9,8 @@
 
 class ANetCharacter;
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNetAmmoChangedSignature, int32, CurrentAmmo, int32, MagazineSize);
+
 /**
  * Minimal hitscan rifle for the network gameplay variant.
  */
@@ -35,6 +37,15 @@ public:
 	/** Returns true if the last shot hit a blocking target. */
 	UFUNCTION(BlueprintPure, Category="Weapon")
 	bool HasValidHitResult() const { return LastHitResult.bBlockingHit; }
+
+	UFUNCTION(BlueprintPure, Category="Weapon|Ammo")
+	int32 GetCurrentAmmo() const { return CurrentAmmo; }
+
+	UFUNCTION(BlueprintPure, Category="Weapon|Ammo")
+	int32 GetMagazineSize() const { return MagazineSize; }
+
+	UPROPERTY(BlueprintAssignable, Category="Weapon|Ammo")
+	FNetAmmoChangedSignature OnAmmoChanged;
 
 protected:
 	virtual void BeginPlay() override;
@@ -69,6 +80,15 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon", meta=(ClampMin=0))
 	float Damage = 20.0f;
 
+	UPROPERTY(EditAnywhere, Replicated, BlueprintReadOnly, Category="Weapon|Ammo", meta=(ClampMin=1))
+	int32 MagazineSize = 30;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Ammo")
+	bool bConsumeAmmo = false;
+
+	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_CurrentAmmo, BlueprintReadOnly, Category="Weapon|Ammo")
+	int32 CurrentAmmo = 30;
+
 	/** Lifetime for the server-authoritative debug trace line. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Debug", meta=(ClampMin=0, Units="s"))
 	float DebugTraceDuration = 0.05f;
@@ -85,4 +105,10 @@ protected:
 	bool bWantsToFire = false;
 
 	FTimerHandle FireCooldownTimer;
+
+private:
+	UFUNCTION()
+	void OnRep_CurrentAmmo();
+
+	void BroadcastAmmoChanged();
 };

@@ -73,6 +73,7 @@ void ANetCharacter::BeginPlay()
 		{
 			const FAttachmentTransformRules AttachmentRule(EAttachmentRule::SnapToTarget, false);
 			CurrentRifle->AttachToActor(this, AttachmentRule);
+			OnCurrentRifleChanged.Broadcast(CurrentRifle);
 		}
 	}
 }
@@ -263,6 +264,11 @@ void ANetCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 	DOREPLIFETIME(ANetCharacter, CurrentRifle);
 }
 
+void ANetCharacter::OnRep_CurrentRifle()
+{
+	OnCurrentRifleChanged.Broadcast(CurrentRifle);
+}
+
 void ANetCharacter::ServerStopFiring_Implementation()
 {
 	HandleStopFiring();
@@ -270,7 +276,7 @@ void ANetCharacter::ServerStopFiring_Implementation()
 
 void ANetCharacter::HandleStopFiring()
 {
-	if (!IsDead() && CurrentRifle)
+	if (CurrentRifle)
 	{
 		CurrentRifle->StopFiringOnServer();
 	}

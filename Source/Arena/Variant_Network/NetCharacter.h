@@ -15,6 +15,8 @@ class ANetRifle;
 class UNetHealthComponent;
 struct FInputActionValue;
 
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetCurrentRifleChangedSignature, ANetRifle*, CurrentRifle);
+
 // DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
 /**
@@ -64,7 +66,7 @@ protected:
 	TSubclassOf<ANetRifle> RifleClass;
 
 	/** Rifle currently owned by this character */
-	UPROPERTY(VisibleInstanceOnly, Replicated, Category="Weapon")
+	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_CurrentRifle, Category="Weapon")
 	TObjectPtr<ANetRifle> CurrentRifle;
 
 public:
@@ -150,8 +152,18 @@ public:
 	/** Returns the replicated health component. */
 	UNetHealthComponent* GetHealthComponent() const { return HealthComponent; }
 
+	UFUNCTION(BlueprintPure, Category="Weapon")
+	ANetRifle* GetCurrentRifle() const { return CurrentRifle; }
+
 	/** Returns true once this character has died. */
 	UFUNCTION(BlueprintPure, Category="Health")
 	bool IsDead() const;
+
+	UPROPERTY(BlueprintAssignable, Category="Weapon")
+	FNetCurrentRifleChangedSignature OnCurrentRifleChanged;
+
+private:
+	UFUNCTION()
+	void OnRep_CurrentRifle();
 
 };
