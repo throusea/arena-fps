@@ -7,6 +7,7 @@
 #include "Components/NetHealthComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
+#include "NetGameMode.h"
 
 ANetNPC::ANetNPC()
 {
@@ -38,6 +39,15 @@ float ANetNPC::TakeDamage(float Damage, FDamageEvent const& DamageEvent, AContro
 	if (!HasAuthority() || !HealthComponent)
 	{
 		return AppliedDamage;
+	}
+
+	if (Damage > 0.0f)
+	{
+		LastDamageInstigator = EventInstigator;
+		if (!LastDamageInstigator.IsValid() && DamageCauser)
+		{
+			LastDamageInstigator = DamageCauser->GetInstigatorController();
+		}
 	}
 
 	return HealthComponent->ApplyHealthDamage(Damage);
@@ -79,6 +89,11 @@ void ANetNPC::OnDeath()
 
 	if (HasAuthority())
 	{
+		if (ANetGameMode* NetGameMode = GetWorld()->GetAuthGameMode<ANetGameMode>())
+		{
+			NetGameMode->NotifyEnemyKilled(this, LastDamageInstigator.Get());
+		}
+
 		Destroy();
 	}
 }

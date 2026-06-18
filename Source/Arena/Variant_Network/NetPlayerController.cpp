@@ -8,6 +8,7 @@
 #include "ArenaCameraManager.h"
 #include "Blueprint/UserWidget.h"
 #include "Arena.h"
+#include "UI/NetHUDWidget.h"
 #include "Widgets/Input/SVirtualJoystick.h"
 
 ANetPlayerController::ANetPlayerController()
@@ -39,6 +40,25 @@ void ANetPlayerController::BeginPlay()
 		}
 
 	}
+
+	if (IsLocalPlayerController())
+	{
+		CreateHUDWidget();
+	}
+}
+
+void ANetPlayerController::OnPossess(APawn* InPawn)
+{
+	Super::OnPossess(InPawn);
+
+	RefreshHUDWidget();
+}
+
+void ANetPlayerController::AcknowledgePossession(APawn* P)
+{
+	Super::AcknowledgePossession(P);
+
+	RefreshHUDWidget();
 }
 
 void ANetPlayerController::SetupInputComponent()
@@ -73,4 +93,31 @@ bool ANetPlayerController::ShouldUseTouchControls() const
 {
 	// are we on a mobile platform? Should we force touch?
 	return SVirtualJoystick::ShouldDisplayTouchInterface() || bForceTouchControls;
+}
+
+void ANetPlayerController::CreateHUDWidget()
+{
+	if (HUDWidget || !HUDWidgetClass)
+	{
+		return;
+	}
+
+	HUDWidget = CreateWidget<UNetHUDWidget>(this, HUDWidgetClass);
+	if (HUDWidget)
+	{
+		HUDWidget->AddToPlayerScreen(0);
+		HUDWidget->RefreshHUD();
+	}
+	else
+	{
+		UE_LOG(LogArena, Error, TEXT("Could not spawn network HUD widget."));
+	}
+}
+
+void ANetPlayerController::RefreshHUDWidget() const
+{
+	if (HUDWidget)
+	{
+		HUDWidget->RefreshHUD();
+	}
 }

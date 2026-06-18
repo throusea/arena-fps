@@ -7,6 +7,7 @@
 #include "NetPlayerController.generated.h"
 
 class UInputMappingContext;
+class UNetHUDWidget;
 class UUserWidget;
 
 /**
@@ -46,12 +47,26 @@ protected:
 	UPROPERTY(EditAnywhere, Config, Category = "Input|Touch Controls")
 	bool bForceTouchControls = false;
 
+	/** HUD widget to spawn for local network players. */
+	UPROPERTY(EditAnywhere, Category="Network|UI")
+	TSubclassOf<UNetHUDWidget> HUDWidgetClass;
+
+	UPROPERTY()
+	TObjectPtr<UNetHUDWidget> HUDWidget;
+
 	/** Gameplay initialization */
 	virtual void BeginPlay() override;
+
+	virtual void OnPossess(APawn* InPawn) override;
+
+	virtual void AcknowledgePossession(APawn* P) override;
 
 	/** Input mapping context setup */
 	virtual void SetupInputComponent() override;
 
 	/** Returns true if the player should use UMG touch controls */
 	bool ShouldUseTouchControls() const;
+
+	void CreateHUDWidget();
+	void RefreshHUDWidget() const;
 };
