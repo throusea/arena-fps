@@ -94,6 +94,6 @@ void ANetNPC::OnDeath()
 			NetGameMode->NotifyEnemyKilled(this, LastDamageInstigator.Get());
 		}
 
-		Destroy();
+		SetLifeSpan(DeathDestroyDelay);
 	}
 }

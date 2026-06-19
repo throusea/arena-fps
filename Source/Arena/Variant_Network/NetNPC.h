@@ -62,6 +62,10 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Attack", meta=(AllowPrivateAccess="true", ClampMin=0, Units="s"))
 	float AttackCooldown = 1.0f;
 
+	/** Keeps the replicated actor alive briefly so hit-result RPCs can resolve its network reference. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Health", meta=(AllowPrivateAccess="true", ClampMin=0.1, Units="s"))
+	float DeathDestroyDelay = 0.25f;
+
 	TWeakObjectPtr<AController> LastDamageInstigator;
 
 	float LastAttackTime = -1000.0f;

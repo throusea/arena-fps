@@ -294,7 +294,7 @@ void ANetCharacter::AddWeaponRecoil(float Recoil)
 {
 	if (IsLocallyControlled())
 	{
-		AddControllerPitchInput(Recoil);
+		AddControllerPitchInput(-Recoil);
 	}
 }
 
