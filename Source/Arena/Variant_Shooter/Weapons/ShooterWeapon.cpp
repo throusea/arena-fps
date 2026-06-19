@@ -164,6 +164,9 @@ void AShooterWeapon::FireProjectile(const FVector& TargetLocation)
 	// get the projectile transform
 	FTransform ProjectileTransform = CalculateProjectileSpawnTransform(TargetLocation);
 
+	// notify Blueprint code before spawning the authoritative projectile
+	BP_OnProjectileFired(ProjectileTransform);
+
 	// spawn the projectile
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
@@ -171,7 +174,7 @@ void AShooterWeapon::FireProjectile(const FVector& TargetLocation)
 	SpawnParams.Owner = GetOwner();
 	SpawnParams.Instigator = PawnOwner;
 
-	AShooterProjectile* Projectile = GetWorld()->SpawnActor<AShooterProjectile>(ProjectileClass, ProjectileTransform, SpawnParams);
+	GetWorld()->SpawnActor<AShooterProjectile>(ProjectileClass, ProjectileTransform, SpawnParams);
 
 	// play the firing montage
 	WeaponOwner->PlayFiringMontage(FiringMontage);

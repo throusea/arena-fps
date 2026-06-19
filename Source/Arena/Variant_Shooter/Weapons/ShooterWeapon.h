@@ -153,6 +153,10 @@ protected:
 	/** Fire a projectile towards the target location */
 	virtual void FireProjectile(const FVector& TargetLocation);
 
+	/** Allows Blueprint code to play cosmetic effects for a fired projectile. */
+	UFUNCTION(BlueprintImplementableEvent, Category="Weapon|Effects", meta=(DisplayName="On Projectile Fired"))
+	void BP_OnProjectileFired(const FTransform& ProjectileTransform);
+
 	/** Calculates the spawn transform for projectiles shot by this weapon */
 	FTransform CalculateProjectileSpawnTransform(const FVector& TargetLocation) const;
 
