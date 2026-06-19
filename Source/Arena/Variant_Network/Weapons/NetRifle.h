@@ -12,8 +12,45 @@ class UNiagaraSystem;
 class APawn;
 class UAnimInstance;
 class UAnimMontage;
+class UCameraShakeBase;
+
+UENUM(BlueprintType)
+enum class ENetWeaponFireType : uint8
+{
+	Hitscan,
+	Projectile
+};
+
+/** Server-authored data describing one weapon shot or confirmed hit. */
+USTRUCT(BlueprintType)
+struct ARENA_API FNetWeaponShotResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category="Weapon")
+	FVector_NetQuantize TraceStart = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category="Weapon")
+	FVector_NetQuantize TraceEnd = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category="Weapon")
+	FVector_NetQuantizeNormal ImpactNormal = FVector::ZeroVector;
+
+	/** Resolved on the receiving machine; may be null when the actor is destroyed or not network-relevant. */
+	UPROPERTY(BlueprintReadOnly, Category="Weapon")
+	TObjectPtr<AActor> HitActor = nullptr;
+
+	UPROPERTY(BlueprintReadOnly, Category="Weapon")
+	bool bBlockingHit = false;
+
+	/** True when the server applied positive damage to the hit actor. */
+	UPROPERTY(BlueprintReadOnly, Category="Weapon")
+	bool bDamagedActor = false;
+};
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNetAmmoChangedSignature, int32, CurrentAmmo, int32, MagazineSize);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetWeaponFiredSignature, const FNetWeaponShotResult&, ShotResult);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetWeaponHitSignature, const FNetWeaponShotResult&, ShotResult);
 
 /**
  * Minimal hitscan rifle for the network gameplay variant.
@@ -35,7 +72,14 @@ public:
 	void StopFiringOnServer();
 
 	UFUNCTION(NetMulticast, Unreliable)
-	void MulticastPlayFireEffects(FVector_NetQuantize TraceStart, FVector_NetQuantize TraceEnd, bool bBlockingHit);
+	void MulticastPlayFireEffects(const FNetWeaponShotResult& ShotResult);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayHitEffects(const FNetWeaponShotResult& ShotResult);
+
+	/** Reports a projectile hit that has already been confirmed on the server. */
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Weapon")
+	void ReportProjectileHit(const FHitResult& HitResult, bool bDamagedActor);
 
 	/** Returns the last line trace result produced by this rifle. */
 	UFUNCTION(BlueprintPure, Category="Weapon")
@@ -51,6 +95,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Weapon|Ammo")
 	int32 GetMagazineSize() const { return MagazineSize; }
 
+	UFUNCTION(BlueprintPure, Category="Weapon")
+	FText GetWeaponName() const { return WeaponName; }
+
+	UFUNCTION(BlueprintPure, Category="Weapon")
+	ENetWeaponFireType GetFireType() const { return FireType; }
+
 	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
 	USkeletalMeshComponent* GetThirdPersonMesh() const { return ThirdPersonMesh; }
 	TSubclassOf<UAnimInstance> GetFirstPersonAnimInstanceClass() const { return FirstPersonAnimInstanceClass; }
@@ -58,6 +108,12 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category="Weapon|Ammo")
 	FNetAmmoChangedSignature OnAmmoChanged;
+
+	UPROPERTY(BlueprintAssignable, Category="Weapon|Effects")
+	FNetWeaponFiredSignature OnWeaponFired;
+
+	UPROPERTY(BlueprintAssignable, Category="Weapon|Effects")
+	FNetWeaponHitSignature OnWeaponHit;
 
 protected:
 	virtual void BeginPlay() override;
@@ -73,9 +129,33 @@ protected:
 	bool TraceFromCamera(FHitResult& OutHitResult) const;
 
 	/** Performs one authoritative shot on the server. */
-	void FireAuthoritativeShot();
+	FNetWeaponShotResult FireAuthoritativeShot();
+
+	/** Spawns a configured projectile on the server. */
+	void FireProjectileOnServer(const FNetWeaponShotResult& ShotResult);
+
+	UFUNCTION(BlueprintImplementableEvent, Category="Weapon|Effects", meta=(DisplayName="Weapon Fired"))
+	void BP_OnWeaponFired(const FNetWeaponShotResult& ShotResult);
+
+	UFUNCTION(BlueprintImplementableEvent, Category="Weapon|Effects", meta=(DisplayName="Weapon Hit"))
+	void BP_OnWeaponHit(const FNetWeaponShotResult& ShotResult);
+
+	UFUNCTION(BlueprintImplementableEvent, Category="Weapon|Ammo", meta=(DisplayName="Weapon Ammo Changed"))
+	void BP_OnAmmoChanged(int32 NewCurrentAmmo, int32 NewMagazineSize);
 
 protected:
+	/** Player-facing weapon name displayed by the HUD. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Weapon")
+	FText WeaponName = NSLOCTEXT("NetWeapon", "DefaultWeaponName", "Rifle");
+
+	/** Determines whether the weapon traces instantly or spawns a projectile. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Weapon")
+	ENetWeaponFireType FireType = ENetWeaponFireType::Hitscan;
+
+	/** Actor class spawned by projectile weapons. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Weapon", meta=(EditCondition="FireType == ENetWeaponFireType::Projectile", EditConditionHides))
+	TSubclassOf<AActor> ProjectileClass;
+
 	/** Maximum trace distance from the camera center. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon", meta=(ClampMin=0, Units="cm"))
 	float TraceDistance = 10000.0f;
@@ -87,6 +167,10 @@ protected:
 	/** Damage applied to the actor hit by the rifle trace. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon", meta=(ClampMin=0))
 	float Damage = 20.0f;
+
+	/** Half-angle of the server-authoritative shot cone. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Aim", meta=(ClampMin=0, ClampMax=90, Units="Degrees"))
+	float SpreadHalfAngle = 0.0f;
 
 	UPROPERTY(EditAnywhere, Replicated, BlueprintReadOnly, Category="Weapon|Ammo", meta=(ClampMin=1))
 	int32 MagazineSize = 30;
@@ -125,6 +209,12 @@ protected:
 
 	UPROPERTY(EditAnywhere, Category="Aim", meta=(ClampMin=0, ClampMax=100))
 	float FiringRecoil = 0.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="Effects")
+	TSubclassOf<UCameraShakeBase> FiringCameraShake;
+
+	UPROPERTY(EditAnywhere, Category="Effects", meta=(ClampMin=0))
+	float CameraShakeScale = 1.0f;
 
 	/** Minimum time between shots. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Refire", meta=(ClampMin=0, Units="s"))
