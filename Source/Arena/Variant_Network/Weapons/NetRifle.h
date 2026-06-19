@@ -5,9 +5,13 @@
 #include "Arena.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "NetWeaponHolder.h"
 #include "NetRifle.generated.h"
 
-class ANetCharacter;
+class UNiagaraSystem;
+class APawn;
+class UAnimInstance;
+class UAnimMontage;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNetAmmoChangedSignature, int32, CurrentAmmo, int32, MagazineSize);
 
@@ -30,6 +34,9 @@ public:
 	/** Stop firing the rifle on Server. */
 	void StopFiringOnServer();
 
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayFireEffects(FVector_NetQuantize TraceStart, FVector_NetQuantize TraceEnd, bool bBlockingHit);
+
 	/** Returns the last line trace result produced by this rifle. */
 	UFUNCTION(BlueprintPure, Category="Weapon")
 	FHitResult GetLastHitResult() const { return LastHitResult; }
@@ -43,6 +50,11 @@ public:
 
 	UFUNCTION(BlueprintPure, Category="Weapon|Ammo")
 	int32 GetMagazineSize() const { return MagazineSize; }
+
+	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
+	USkeletalMeshComponent* GetThirdPersonMesh() const { return ThirdPersonMesh; }
+	TSubclassOf<UAnimInstance> GetFirstPersonAnimInstanceClass() const { return FirstPersonAnimInstanceClass; }
+	TSubclassOf<UAnimInstance> GetThirdPersonAnimInstanceClass() const { return ThirdPersonAnimInstanceClass; }
 
 	UPROPERTY(BlueprintAssignable, Category="Weapon|Ammo")
 	FNetAmmoChangedSignature OnAmmoChanged;
@@ -67,10 +79,6 @@ protected:
 	/** Maximum trace distance from the camera center. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon", meta=(ClampMin=0, Units="cm"))
 	float TraceDistance = 10000.0f;
-
-	/** Minimum time between shots. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon", meta=(ClampMin=0, Units="s"))
-	float FireCooldown = 0.2f;
 
 	/** Trace channel used by the rifle. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon")
@@ -97,9 +105,54 @@ protected:
 	UPROPERTY(VisibleInstanceOnly, Replicated, BlueprintReadOnly, Category="Weapon")
 	FHitResult LastHitResult;
 
-	/** Character that owns this rifle. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Aim")
+	FName MuzzleSocketName;
+
+	UPROPERTY(EditAnywhere, Category="Aim", meta=(ClampMin=0, ClampMax=1000, Units="cm"))
+	float MuzzleOffset = 10.f;
+
+	UPROPERTY(EditAnywhere, Category="Refire")
+	bool bFullAuto = false;
+
+	UPROPERTY(EditAnywhere, Category="Animation")
+	TObjectPtr<UAnimMontage> FiringMontage;
+
+	UPROPERTY(EditAnywhere, Category="Animation")
+	TSubclassOf<UAnimInstance> FirstPersonAnimInstanceClass;
+
+	UPROPERTY(EditAnywhere, Category="Animation")
+	TSubclassOf<UAnimInstance> ThirdPersonAnimInstanceClass;
+
+	UPROPERTY(EditAnywhere, Category="Aim", meta=(ClampMin=0, ClampMax=100))
+	float FiringRecoil = 0.0f;
+
+	/** Minimum time between shots. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Refire", meta=(ClampMin=0, Units="s"))
+	float FireCooldown = 0.2f;
+
+	/** First person perspective mesh */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	USkeletalMeshComponent* FirstPersonMesh;
+
+	/** Third person perspective mesh */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components")
+	USkeletalMeshComponent* ThirdPersonMesh;
+
+	UPROPERTY(EditDefaultsOnly, Category="Effects")
+	TObjectPtr<UNiagaraSystem> MuzzleFlashFX;
+
+	UPROPERTY(EditDefaultsOnly, Category="Effects")
+	TObjectPtr<USoundBase> FireSound;
+
+	UPROPERTY(EditDefaultsOnly, Category="Effects")
+	TObjectPtr<USoundBase> ImpactSound;
+
+	/** Pawn that owns this rifle. */
 	UPROPERTY()
-	TObjectPtr<ANetCharacter> OwningCharacter;
+	TObjectPtr<APawn> PawnOwner;
+
+	/** Interface used to communicate with the current weapon holder. */
+	INetWeaponHolder* WeaponOwner = nullptr;
 
 	bool bCanFire = true;
 	bool bWantsToFire = false;

@@ -18,6 +18,7 @@ public class Arena : ModuleRules
 			"AIModule",
 			"StateTreeModule",
 			"GameplayStateTreeModule",
+			"Niagara",
 			"UMG",
 			"Slate"
 		});
