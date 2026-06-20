@@ -161,25 +161,6 @@ void ANetRifle::MulticastPlayHitEffects_Implementation(const FNetWeaponShotResul
 	OnWeaponHit.Broadcast(ShotResult);
 }
 
-void ANetRifle::ReportProjectileHit(const FHitResult& HitResult, bool bDamagedActor)
-{
-	if (!HasAuthority() || !HitResult.bBlockingHit)
-	{
-		return;
-	}
-
-	LastHitResult = HitResult;
-
-	FNetWeaponShotResult ShotResult;
-	ShotResult.TraceStart = HitResult.TraceStart;
-	ShotResult.TraceEnd = HitResult.ImpactPoint;
-	ShotResult.ImpactNormal = HitResult.ImpactNormal;
-	ShotResult.HitActor = HitResult.GetActor();
-	ShotResult.bBlockingHit = true;
-	ShotResult.bDamagedActor = bDamagedActor;
-	MulticastPlayHitEffects(ShotResult);
-}
-
 void ANetRifle::FireOnServer()
 {
 	if (!bWantsToFire || !bCanFire || (bConsumeAmmo && CurrentAmmo <= 0))

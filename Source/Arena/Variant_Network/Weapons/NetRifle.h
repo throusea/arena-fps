@@ -77,10 +77,6 @@ public:
 	UFUNCTION(NetMulticast, Unreliable)
 	void MulticastPlayHitEffects(const FNetWeaponShotResult& ShotResult);
 
-	/** Reports a projectile hit that has already been confirmed on the server. */
-	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Weapon")
-	void ReportProjectileHit(const FHitResult& HitResult, bool bDamagedActor);
-
 	/** Returns the last line trace result produced by this rifle. */
 	UFUNCTION(BlueprintPure, Category="Weapon")
 	FHitResult GetLastHitResult() const { return LastHitResult; }
