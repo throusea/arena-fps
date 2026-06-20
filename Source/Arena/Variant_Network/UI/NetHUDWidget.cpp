@@ -51,7 +51,7 @@ void UNetHUDWidget::HandleVictoryStateChanged()
 	RefreshVictoryState();
 }
 
-void UNetHUDWidget::HandleCurrentRifleChanged(ANetRifle* CurrentRifle)
+void UNetHUDWidget::HandleCurrentRifleChanged(ANetWeaponBase* CurrentRifle)
 {
 	BP_OnCurrentRifleChanged(CurrentRifle);
 
@@ -66,16 +66,16 @@ void UNetHUDWidget::HandleAmmoChanged(int32 CurrentAmmo, int32 MagazineSize)
 	BP_OnAmmoChanged(CurrentAmmo, MagazineSize);
 }
 
-void UNetHUDWidget::HandleWeaponFired(const FNetWeaponShotResult& ShotResult)
+void UNetHUDWidget::HandleWeaponFired(const FNetWeaponFireResult& FireResult)
 {
-	BP_OnCrosshairFired(ShotResult);
+	BP_OnCrosshairFired(FireResult);
 }
 
-void UNetHUDWidget::HandleWeaponHit(const FNetWeaponShotResult& ShotResult)
+void UNetHUDWidget::HandleWeaponHit(const FNetWeaponImpactResult& ImpactResult)
 {
-	if (ShotResult.bDamagedActor)
+	if (ImpactResult.bDamagedActor)
 	{
-		BP_OnHitConfirmed(ShotResult);
+		BP_OnHitConfirmed(ImpactResult);
 	}
 }
 
@@ -121,7 +121,7 @@ void UNetHUDWidget::UnbindFromDataSources()
 		Character->OnCurrentRifleChanged.RemoveDynamic(this, &UNetHUDWidget::HandleCurrentRifleChanged);
 	}
 
-	if (ANetRifle* Rifle = ObservedRifle.Get())
+	if (ANetWeaponBase* Rifle = ObservedRifle.Get())
 	{
 		Rifle->OnAmmoChanged.RemoveDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
 		Rifle->OnWeaponFired.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponFired);
@@ -184,14 +184,14 @@ void UNetHUDWidget::BindToCharacter(ANetCharacter* NewCharacter)
 	BindToRifle(NewCharacter->GetCurrentRifle());
 }
 
-void UNetHUDWidget::BindToRifle(ANetRifle* NewRifle)
+void UNetHUDWidget::BindToRifle(ANetWeaponBase* NewRifle)
 {
 	if (ObservedRifle.Get() == NewRifle)
 	{
 		return;
 	}
 
-	if (ANetRifle* OldRifle = ObservedRifle.Get())
+	if (ANetWeaponBase* OldRifle = ObservedRifle.Get())
 	{
 		OldRifle->OnAmmoChanged.RemoveDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
 		OldRifle->OnWeaponFired.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponFired);
@@ -276,7 +276,7 @@ void UNetHUDWidget::RefreshVictoryState()
 
 void UNetHUDWidget::RefreshAmmo()
 {
-	const ANetRifle* Rifle = ObservedRifle.Get();
+	const ANetWeaponBase* Rifle = ObservedRifle.Get();
 	BP_OnAmmoChanged(
 		Rifle ? Rifle->GetCurrentAmmo() : 0,
 		Rifle ? Rifle->GetMagazineSize() : 0
@@ -285,13 +285,13 @@ void UNetHUDWidget::RefreshAmmo()
 
 void UNetHUDWidget::RefreshWeaponName()
 {
-	const ANetRifle* Rifle = ObservedRifle.Get();
+	const ANetWeaponBase* Rifle = ObservedRifle.Get();
 	BP_OnWeaponNameChanged(Rifle ? Rifle->GetWeaponName() : FText::GetEmpty());
 }
 
 void UNetHUDWidget::RefreshSpread()
 {
-	const ANetRifle* Rifle = ObservedRifle.Get();
+	const ANetWeaponBase* Rifle = ObservedRifle.Get();
 	BP_OnCrosshairSpreadChanged(
 		Rifle ? Rifle->GetCurrentSpreadAngle() : 0.0f,
 		Rifle ? Rifle->GetNormalizedSpread() : 0.0f);

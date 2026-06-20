@@ -36,6 +36,12 @@ ANetCharacter::ANetCharacter()
 	FirstPersonCameraComponent->FirstPersonFieldOfView = 70.0f;
 	FirstPersonCameraComponent->FirstPersonScale = 0.6f;
 
+	DeathCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("Death Camera"));
+	DeathCamera->SetupAttachment(GetCapsuleComponent());
+	DeathCamera->SetRelativeLocationAndRotation(FVector(-300.0f, 0.0f, 120.0f), FRotator(-10.0f, 0.0f, 0.0f));
+	DeathCamera->bUsePawnControlRotation = false;
+	DeathCamera->SetAutoActivate(false);
+
 	// configure the character comps
 	GetMesh()->SetOwnerNoSee(true);
 	GetMesh()->FirstPersonPrimitiveType = EFirstPersonPrimitiveType::WorldSpaceRepresentation;
@@ -237,8 +243,20 @@ void ANetCharacter::DoStartFiring()
 
 void ANetCharacter::OnDeath()
 {
-	DoStopFiring();
+	if (HasAuthority() || IsLocallyControlled())
+	{
+		DoStopFiring();
+	}
+
 	GetCharacterMovement()->DisableMovement();
+
+	if (IsLocallyControlled())
+	{
+		FirstPersonCameraComponent->Deactivate();
+		DeathCamera->Activate(true);
+	}
+
+	BP_OnDeath();
 }
 
 void ANetCharacter::ServerStartFiring_Implementation()
@@ -253,12 +271,12 @@ void ANetCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 	DOREPLIFETIME(ANetCharacter, CurrentRifle);
 }
 
-void ANetCharacter::OnRep_CurrentRifle(ANetRifle* PreviousRifle)
+void ANetCharacter::OnRep_CurrentRifle(ANetWeaponBase* PreviousRifle)
 {
 	ApplyCurrentRifle(PreviousRifle);
 }
 
-void ANetCharacter::AttachWeaponMeshes(ANetRifle* Weapon)
+void ANetCharacter::AttachWeaponMeshes(ANetWeaponBase* Weapon)
 {
 	if (!IsValid(Weapon))
 	{
@@ -267,7 +285,11 @@ void ANetCharacter::AttachWeaponMeshes(ANetRifle* Weapon)
 
 	const FAttachmentTransformRules AttachmentRules(EAttachmentRule::SnapToTarget, false);
 
-	Weapon->GetFirstPersonMesh()->AttachToComponent(FirstPersonMesh, AttachmentRules, FirstPersonWeaponSocket);
+	if (GetNetMode() != NM_DedicatedServer)
+	{
+		Weapon->GetFirstPersonMesh()->AttachToComponent(FirstPersonMesh, AttachmentRules, FirstPersonWeaponSocket);
+	}
+
 	Weapon->GetThirdPersonMesh()->AttachToComponent(GetMesh(), AttachmentRules, ThirdPersonWeaponSocket);
 	Weapon->GetThirdPersonMesh()->SetRelativeTransform(ThirdPersonWeaponAttachmentOffset);
 }
@@ -326,7 +348,7 @@ FVector ANetCharacter::GetWeaponTargetLocation()
 	return HitResult.bBlockingHit ? HitResult.ImpactPoint : TraceEnd;
 }
 
-void ANetCharacter::AddWeaponClass(const TSubclassOf<ANetRifle>& WeaponClass)
+void ANetCharacter::AddWeaponClass(const TSubclassOf<ANetWeaponBase>& WeaponClass)
 {
 	if (!HasAuthority())
 	{
@@ -344,13 +366,13 @@ void ANetCharacter::AddWeaponClass(const TSubclassOf<ANetRifle>& WeaponClass)
 	SpawnParams.Instigator = this;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
-	ANetRifle* AddedWeapon = GetWorld()->SpawnActor<ANetRifle>(WeaponClass, GetActorTransform(), SpawnParams);
+	ANetWeaponBase* AddedWeapon = GetWorld()->SpawnActor<ANetWeaponBase>(WeaponClass, GetActorTransform(), SpawnParams);
 	if (!AddedWeapon)
 	{
 		return;
 	}
 
-	ANetRifle* PreviousRifle = CurrentRifle;
+	ANetWeaponBase* PreviousRifle = CurrentRifle;
 	CurrentRifle = AddedWeapon;
 	ForceNetUpdate();
 
@@ -361,14 +383,11 @@ void ANetCharacter::AddWeaponClass(const TSubclassOf<ANetRifle>& WeaponClass)
 		PreviousRifle->Destroy();
 	}
 
-	// A listen server also owns a local presentation and does not receive RepNotify callbacks.
-	if (GetNetMode() != NM_DedicatedServer)
-	{
-		ApplyCurrentRifle(nullptr);
-	}
+	// Authority does not receive the CurrentRifle RepNotify, so apply attachment locally as well.
+	ApplyCurrentRifle(nullptr);
 }
 
-void ANetCharacter::OnWeaponActivated(ANetRifle* Weapon)
+void ANetCharacter::OnWeaponActivated(ANetWeaponBase* Weapon)
 {
 	if (IsValid(Weapon))
 	{
@@ -386,7 +405,7 @@ void ANetCharacter::OnWeaponActivated(ANetRifle* Weapon)
 	}
 }
 
-void ANetCharacter::OnWeaponDeactivated(ANetRifle* Weapon)
+void ANetCharacter::OnWeaponDeactivated(ANetWeaponBase* Weapon)
 {
 }
 
@@ -394,7 +413,7 @@ void ANetCharacter::OnSemiWeaponRefire()
 {
 }
 
-void ANetCharacter::ApplyCurrentRifle(ANetRifle* PreviousRifle)
+void ANetCharacter::ApplyCurrentRifle(ANetWeaponBase* PreviousRifle)
 {
 	if (IsValid(PreviousRifle) && PreviousRifle != CurrentRifle)
 	{

@@ -9,6 +9,25 @@
 class UNetHealthComponent;
 class AController;
 
+/** Server-authored data used by Blueprint hit presentation. */
+USTRUCT(BlueprintType)
+struct ARENA_API FNetNPCHitPresentation
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category="Hit")
+	float AppliedDamage = 0.0f;
+
+	UPROPERTY(BlueprintReadOnly, Category="Hit")
+	FVector_NetQuantize HitLocation = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category="Hit")
+	FVector_NetQuantizeNormal HitDirection = FVector::ZeroVector;
+
+	UPROPERTY(BlueprintReadOnly, Category="Hit")
+	bool bFatal = false;
+};
+
 /**
  * Minimal network NPC that can receive server-authoritative damage.
  */
@@ -38,12 +57,39 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Attack")
 	bool TryAttack(AActor* Target);
 
+	UFUNCTION()
+	void DoAttack(AActor* Target);
+
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayAttackPresentation(AActor* Target);
+
+	UFUNCTION(NetMulticast, Unreliable)
+	void MulticastPlayHitPresentation(const FNetNPCHitPresentation& HitPresentation);
+
+	UFUNCTION(BlueprintImplementableEvent, Category="NPC|Presentation", meta=(DisplayName="On Attack"))
+	void BP_OnAttack(AActor* Target);
+
+	UFUNCTION(BlueprintImplementableEvent, Category="NPC|Presentation", meta=(DisplayName="On Hit"))
+	void BP_OnHit(const FNetNPCHitPresentation& HitPresentation);
+
+	UFUNCTION(BlueprintImplementableEvent, Category="NPC|Presentation", meta=(DisplayName="On Death"))
+	void BP_OnDeath();
 
 	/** Called when replicated health reaches zero. */
 	UFUNCTION()
 	void OnDeath();
+
+	FNetNPCHitPresentation BuildHitPresentation(
+		float AppliedDamage,
+		const FDamageEvent& DamageEvent,
+		AController* EventInstigator,
+		AActor* DamageCauser) const;
+
+	void ApplyHitKnockback(const FVector& HitDirection);
 
 private:
 	/** Replicated health state. */
@@ -62,11 +108,29 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Attack", meta=(AllowPrivateAccess="true", ClampMin=0, Units="s"))
 	float AttackCooldown = 1.0f;
 
-	/** Keeps the replicated actor alive briefly so hit-result RPCs can resolve its network reference. */
+	/** Delay between accepting an attack and performing its authoritative hit check. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Attack", meta=(AllowPrivateAccess="true", ClampMin=0, Units="s"))
+	float AttackWindup = 0.5f;
+
+	/** Horizontal velocity impulse applied by the server for a non-fatal hit. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Hit", meta=(AllowPrivateAccess="true", ClampMin=0, Units="cm/s"))
+	float HitKnockbackStrength = 150.0f;
+
+	/** Small upward component added to the non-fatal hit impulse. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="AI|Hit", meta=(AllowPrivateAccess="true", ClampMin=0, Units="cm/s"))
+	float HitKnockbackVerticalBoost = 20.0f;
+
+	/** Keeps the replicated actor alive while clients play its death presentation. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Health", meta=(AllowPrivateAccess="true", ClampMin=0.1, Units="s"))
-	float DeathDestroyDelay = 0.25f;
+	float DeathDestroyDelay = 3.0f;
 
 	TWeakObjectPtr<AController> LastDamageInstigator;
 
 	float LastAttackTime = -1000.0f;
+
+	FTimerHandle AttackWindupTimerHandle;
+
+	bool bAttackInProgress = false;
+
+	bool bDeathPresentationStarted = false;
 };

@@ -45,15 +45,15 @@ protected:
 	void BP_OnAmmoChanged(int32 CurrentAmmo, int32 MagazineSize);
 
 	UFUNCTION(BlueprintImplementableEvent, Category="HUD", meta=(DisplayName="Rifle Changed"))
-	void BP_OnCurrentRifleChanged(ANetRifle* CurrentRifle);
+	void BP_OnCurrentRifleChanged(ANetWeaponBase* CurrentRifle);
 
 	/** Starts the crosshair firing feedback animation. */
 	UFUNCTION(BlueprintImplementableEvent, Category="HUD|Weapon", meta=(DisplayName="Crosshair Fired"))
-	void BP_OnCrosshairFired(const FNetWeaponShotResult& ShotResult);
+	void BP_OnCrosshairFired(const FNetWeaponFireResult& FireResult);
 
 	/** Shows hit feedback from a server-confirmed weapon hit. */
 	UFUNCTION(BlueprintImplementableEvent, Category="HUD|Weapon", meta=(DisplayName="Hit Confirmed"))
-	void BP_OnHitConfirmed(const FNetWeaponShotResult& ShotResult);
+	void BP_OnHitConfirmed(const FNetWeaponImpactResult& ImpactResult);
 
 	/** Updates the displayed name of the equipped weapon. */
 	UFUNCTION(BlueprintImplementableEvent, Category="HUD|Weapon", meta=(DisplayName="Weapon Name Changed"))
@@ -79,17 +79,17 @@ private:
 
 	/** Bind Function for Handle Current Rifle Changed Event */
 	UFUNCTION()
-	void HandleCurrentRifleChanged(ANetRifle* CurrentRifle);
+	void HandleCurrentRifleChanged(ANetWeaponBase* CurrentRifle);
 
 	/** Bind Function for Handle Ammo Changed Event */
 	UFUNCTION()
 	void HandleAmmoChanged(int32 CurrentAmmo, int32 MagazineSize);
 
 	UFUNCTION()
-	void HandleWeaponFired(const FNetWeaponShotResult& ShotResult);
+	void HandleWeaponFired(const FNetWeaponFireResult& FireResult);
 
 	UFUNCTION()
-	void HandleWeaponHit(const FNetWeaponShotResult& ShotResult);
+	void HandleWeaponHit(const FNetWeaponImpactResult& ImpactResult);
 
 	UFUNCTION()
 	void HandleSpreadChanged(float SpreadAngle, float NormalizedSpread);
@@ -100,7 +100,7 @@ private:
 	/** Unbind All Events to Data Sources */
 	void UnbindFromDataSources();
 	void BindToCharacter(ANetCharacter* NewCharacter);
-	void BindToRifle(ANetRifle* NewRifle);
+	void BindToRifle(ANetWeaponBase* NewRifle);
 	void BindToPlayerState(ANetPlayerStateBase* NewPlayerState);
 	void BindToGameState(ANetGameState* NewGameState);
 
@@ -129,7 +129,7 @@ private:
 	TWeakObjectPtr<UNetHealthComponent> ObservedHealthComponent;
 
 	UPROPERTY(Transient)
-	TWeakObjectPtr<ANetRifle> ObservedRifle;
+	TWeakObjectPtr<ANetWeaponBase> ObservedRifle;
 
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ANetPlayerStateBase> ObservedPlayerState;
