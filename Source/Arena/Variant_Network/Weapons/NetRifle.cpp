@@ -1,13 +1,18 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "NetRifle.h"
-#include "Variant_Network/NetCharacter.h"
-#include "Camera/CameraComponent.h"
+#include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Camera/PlayerCameraManager.h"
 #include "DrawDebugHelpers.h"
+#include "NiagaraFunctionLibrary.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Math/RotationMatrix.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 
@@ -15,13 +20,27 @@ ANetRifle::ANetRifle()
 {
 	PrimaryActorTick.bCanEverTick = false;
 	bReplicates = true;
+	bNetUseOwnerRelevancy = true;
+
+	RootComponent = CreateDefaultSubobject<USceneComponent>(TEXT("RootComponent"));
+
+	FirstPersonMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FirstPersonMesh"));
+	FirstPersonMesh->SetupAttachment(RootComponent);
+	FirstPersonMesh->SetCollisionProfileName(FName("NoCollision"));
+	FirstPersonMesh->SetOnlyOwnerSee(true);
+
+	ThirdPersonMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("ThirdPersonMesh"));
+	ThirdPersonMesh->SetupAttachment(RootComponent);
+	ThirdPersonMesh->SetCollisionProfileName(FName("NoCollision"));
+	ThirdPersonMesh->SetOwnerNoSee(true);
 }
 
 void ANetRifle::BeginPlay()
 {
 	Super::BeginPlay();
 
-	OwningCharacter = Cast<ANetCharacter>(GetOwner());
+	WeaponOwner = Cast<INetWeaponHolder>(GetOwner());
+	PawnOwner = Cast<APawn>(GetOwner());
 
 	if (HasAuthority())
 	{
@@ -52,13 +71,94 @@ void ANetRifle::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void ANetRifle::StartFiringOnServer()
 {
+	if (!HasAuthority())
+	{
+		return;
+	}
+
 	bWantsToFire = true;
 	FireOnServer();
 }
 
 void ANetRifle::StopFiringOnServer()
 {
+	if (!HasAuthority())
+	{
+		return;
+	}
+
 	bWantsToFire = false;
+}
+
+void ANetRifle::MulticastPlayFireEffects_Implementation(const FNetWeaponShotResult& ShotResult)
+{
+	if (WeaponOwner)
+	{
+		WeaponOwner->PlayFiringMontage(FiringMontage);
+		WeaponOwner->AddWeaponRecoil(FiringRecoil);
+	}
+
+	if (PawnOwner && PawnOwner->IsLocallyControlled() && FiringCameraShake)
+	{
+		if (const APlayerController* PlayerController = Cast<APlayerController>(PawnOwner->GetController()))
+		{
+			if (APlayerCameraManager* CameraManager = PlayerController->PlayerCameraManager)
+			{
+				CameraManager->StartCameraShake(FiringCameraShake, CameraShakeScale);
+			}
+		}
+	}
+
+	USkeletalMeshComponent* MuzzleMesh = PawnOwner && PawnOwner->IsLocallyControlled()
+		? FirstPersonMesh
+		: ThirdPersonMesh;
+	const bool bHasMuzzleSocket = MuzzleMesh && MuzzleMesh->DoesSocketExist(MuzzleSocketName);
+	const FVector MuzzleLocation = bHasMuzzleSocket
+		? MuzzleMesh->GetSocketLocation(MuzzleSocketName)
+		: FVector(ShotResult.TraceStart);
+	const FVector ShotDirection = (FVector(ShotResult.TraceEnd) - MuzzleLocation).GetSafeNormal();
+	const FVector EffectLocation = MuzzleLocation + (ShotDirection * MuzzleOffset);
+	const FRotator ShotRotation = ShotDirection.IsNearlyZero()
+		? FRotator::ZeroRotator
+		: FRotationMatrix::MakeFromZ(ShotDirection).Rotator();
+
+	if (MuzzleFlashFX)
+	{
+		if (bHasMuzzleSocket)
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAttached(
+				MuzzleFlashFX,
+				MuzzleMesh,
+				MuzzleSocketName,
+				EffectLocation,
+				ShotRotation,
+				EAttachLocation::KeepWorldPosition,
+				true);
+		}
+		else
+		{
+			UNiagaraFunctionLibrary::SpawnSystemAtLocation(this, MuzzleFlashFX, EffectLocation, ShotRotation);
+		}
+	}
+
+	if (FireSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, FireSound, EffectLocation);
+	}
+
+	BP_OnWeaponFired(ShotResult);
+	OnWeaponFired.Broadcast(ShotResult);
+}
+
+void ANetRifle::MulticastPlayHitEffects_Implementation(const FNetWeaponShotResult& ShotResult)
+{
+	if (ImpactSound)
+	{
+		UGameplayStatics::PlaySoundAtLocation(this, ImpactSound, ShotResult.TraceEnd);
+	}
+
+	BP_OnWeaponHit(ShotResult);
+	OnWeaponHit.Broadcast(ShotResult);
 }
 
 void ANetRifle::FireOnServer()
@@ -71,7 +171,12 @@ void ANetRifle::FireOnServer()
 	bCanFire = false;
 	LastHitResult = FHitResult();
 
-	FireAuthoritativeShot();
+	const FNetWeaponShotResult ShotResult = FireAuthoritativeShot();
+	MulticastPlayFireEffects(ShotResult);
+	if (ShotResult.bBlockingHit)
+	{
+		MulticastPlayHitEffects(ShotResult);
+	}
 	if (bConsumeAmmo)
 	{
 		CurrentAmmo = FMath::Max(0, CurrentAmmo - 1);
@@ -85,7 +190,12 @@ void ANetRifle::FireCooldownExpired()
 {
 	bCanFire = true;
 
-	if (bWantsToFire)
+	if (WeaponOwner)
+	{
+		WeaponOwner->OnSemiWeaponRefire();
+	}
+
+	if (bWantsToFire && bFullAuto)
 	{
 		FireOnServer();
 	}
@@ -93,34 +203,39 @@ void ANetRifle::FireCooldownExpired()
 
 bool ANetRifle::TraceFromCamera(FHitResult& OutHitResult) const
 {
-	if (!OwningCharacter)
+	if (!WeaponOwner || !PawnOwner)
 	{
 		return false;
 	}
 
 	FVector TraceStart;
 	FRotator TraceRotation;
-	if (AController* Controller = OwningCharacter->GetController())
+	if (AController* Controller = PawnOwner->GetController())
 	{
 		Controller->GetPlayerViewPoint(TraceStart, TraceRotation);
 	}
 	else
 	{
-		const UCameraComponent* Camera = OwningCharacter->GetFirstPersonCameraComponent();
-		if (!Camera)
-		{
-			return false;
-		}
-
-		TraceStart = Camera->GetComponentLocation();
-		TraceRotation = Camera->GetComponentRotation();
+		PawnOwner->GetActorEyesViewPoint(TraceStart, TraceRotation);
 	}
 
-	const FVector TraceEnd = TraceStart + (TraceRotation.Vector() * TraceDistance);
+	const FVector TargetLocation = WeaponOwner->GetWeaponTargetLocation();
+	FVector ShotDirection = (TargetLocation - TraceStart).GetSafeNormal();
+	if (ShotDirection.IsNearlyZero())
+	{
+		ShotDirection = TraceRotation.Vector();
+	}
 
-	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NetRifleTrace), true, OwningCharacter);
+	if (SpreadHalfAngle > 0.0f)
+	{
+		ShotDirection = FMath::VRandCone(ShotDirection, FMath::DegreesToRadians(SpreadHalfAngle));
+	}
+
+	const FVector TraceEnd = TraceStart + (ShotDirection * TraceDistance);
+
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NetRifleTrace), true, PawnOwner);
 	QueryParams.AddIgnoredActor(this);
-	QueryParams.AddIgnoredActor(OwningCharacter);
+	QueryParams.AddIgnoredActor(PawnOwner);
 
 	const bool bHit = GetWorld()->LineTraceSingleByChannel(OutHitResult, TraceStart, TraceEnd, TraceChannel, QueryParams);
 	OutHitResult.TraceStart = TraceStart;
@@ -129,19 +244,34 @@ bool ANetRifle::TraceFromCamera(FHitResult& OutHitResult) const
 	return bHit;
 }
 
-void ANetRifle::FireAuthoritativeShot()
+FNetWeaponShotResult ANetRifle::FireAuthoritativeShot()
 {
 	LastHitResult = FHitResult();
 
 	const bool bHit = TraceFromCamera(LastHitResult);
 	const FVector TraceEnd = bHit ? LastHitResult.ImpactPoint : LastHitResult.TraceEnd;
 
+	FNetWeaponShotResult ShotResult;
+	ShotResult.TraceStart = LastHitResult.TraceStart;
+	ShotResult.TraceEnd = TraceEnd;
+	ShotResult.ImpactNormal = bHit ? LastHitResult.ImpactNormal : FVector::ZeroVector;
+	ShotResult.HitActor = bHit ? LastHitResult.GetActor() : nullptr;
+	ShotResult.bBlockingHit = bHit && FireType == ENetWeaponFireType::Hitscan;
+
+	if (FireType == ENetWeaponFireType::Projectile)
+	{
+		FireProjectileOnServer(ShotResult);
+		LastHitResult = FHitResult();
+		return ShotResult;
+	}
+
 	if (bHit)
 	{
 		if (AActor* HitActor = LastHitResult.GetActor())
 		{
-			AController* InstigatorController = OwningCharacter ? OwningCharacter->GetController() : nullptr;
-			UGameplayStatics::ApplyDamage(HitActor, Damage, InstigatorController, this, nullptr);
+			AController* InstigatorController = PawnOwner ? PawnOwner->GetController() : nullptr;
+			const float AppliedDamage = UGameplayStatics::ApplyDamage(HitActor, Damage, InstigatorController, this, nullptr);
+			ShotResult.bDamagedActor = AppliedDamage > 0.0f;
 		}
 	}
 
@@ -152,6 +282,26 @@ void ANetRifle::FireAuthoritativeShot()
 	}
 
 	DrawDebugLine(GetWorld(), LastHitResult.TraceStart, TraceEnd, bHit ? FColor::Red : FColor::Yellow, false, DebugTraceDuration, 0, 1.0f);
+
+	return ShotResult;
+}
+
+void ANetRifle::FireProjectileOnServer(const FNetWeaponShotResult& ShotResult)
+{
+	if (!ProjectileClass)
+	{
+		return;
+	}
+
+	const FVector ShotDirection = (ShotResult.TraceEnd - ShotResult.TraceStart).GetSafeNormal();
+	const FVector SpawnLocation = ShotResult.TraceStart + (ShotDirection * MuzzleOffset);
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.Instigator = PawnOwner;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	GetWorld()->SpawnActor<AActor>(ProjectileClass, SpawnLocation, ShotDirection.Rotation(), SpawnParams);
 }
 
 void ANetRifle::OnRep_CurrentAmmo()
@@ -162,4 +312,10 @@ void ANetRifle::OnRep_CurrentAmmo()
 void ANetRifle::BroadcastAmmoChanged()
 {
 	OnAmmoChanged.Broadcast(CurrentAmmo, MagazineSize);
+	BP_OnAmmoChanged(CurrentAmmo, MagazineSize);
+
+	if (WeaponOwner)
+	{
+		WeaponOwner->UpdateWeaponHUD(CurrentAmmo, MagazineSize);
+	}
 }

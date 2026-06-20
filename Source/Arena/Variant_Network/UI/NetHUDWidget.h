@@ -4,12 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Variant_Network/Weapons/NetRifle.h"
 #include "NetHUDWidget.generated.h"
 
 class ANetCharacter;
 class ANetGameState;
 class ANetPlayerStateBase;
-class ANetRifle;
 class UNetHealthComponent;
 
 /**
@@ -46,6 +46,18 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category="HUD", meta=(DisplayName="Rifle Changed"))
 	void BP_OnCurrentRifleChanged(ANetRifle* CurrentRifle);
 
+	/** Starts the crosshair firing feedback animation. */
+	UFUNCTION(BlueprintImplementableEvent, Category="HUD|Weapon", meta=(DisplayName="Crosshair Fired"))
+	void BP_OnCrosshairFired(const FNetWeaponShotResult& ShotResult);
+
+	/** Shows hit feedback from a server-confirmed weapon hit. */
+	UFUNCTION(BlueprintImplementableEvent, Category="HUD|Weapon", meta=(DisplayName="Hit Confirmed"))
+	void BP_OnHitConfirmed(const FNetWeaponShotResult& ShotResult);
+
+	/** Updates the displayed name of the equipped weapon. */
+	UFUNCTION(BlueprintImplementableEvent, Category="HUD|Weapon", meta=(DisplayName="Weapon Name Changed"))
+	void BP_OnWeaponNameChanged(const FText& WeaponName);
+
 private:
 	/** Bind Function for Health Changed Event */
 	UFUNCTION()
@@ -67,6 +79,12 @@ private:
 	UFUNCTION()
 	void HandleAmmoChanged(int32 CurrentAmmo, int32 MagazineSize);
 
+	UFUNCTION()
+	void HandleWeaponFired(const FNetWeaponShotResult& ShotResult);
+
+	UFUNCTION()
+	void HandleWeaponHit(const FNetWeaponShotResult& ShotResult);
+
 	/** Bind All Events to Data Sources */
 	void BindToDataSources();
 
@@ -81,6 +99,7 @@ private:
 	void RefreshScore();
 	void RefreshVictoryState();
 	void RefreshAmmo();
+	void RefreshWeaponName();
 
 private:
 	UPROPERTY(Transient)

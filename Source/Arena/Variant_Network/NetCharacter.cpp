@@ -63,24 +63,13 @@ void ANetCharacter::BeginPlay()
 
 	if (HasAuthority() && RifleClass)
 	{
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.Owner = this;
-		SpawnParams.Instigator = this;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-		CurrentRifle = GetWorld()->SpawnActor<ANetRifle>(RifleClass, GetActorTransform(), SpawnParams);
-		if (CurrentRifle)
-		{
-			const FAttachmentTransformRules AttachmentRule(EAttachmentRule::SnapToTarget, false);
-			CurrentRifle->AttachToActor(this, AttachmentRule);
-			OnCurrentRifleChanged.Broadcast(CurrentRifle);
-		}
+		AddWeaponClass(RifleClass);
 	}
 }
 
 void ANetCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (IsValid(CurrentRifle))
+	if (HasAuthority() && IsValid(CurrentRifle))
 	{
 		CurrentRifle->Destroy();
 		CurrentRifle = nullptr;
@@ -264,9 +253,164 @@ void ANetCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLif
 	DOREPLIFETIME(ANetCharacter, CurrentRifle);
 }
 
-void ANetCharacter::OnRep_CurrentRifle()
+void ANetCharacter::OnRep_CurrentRifle(ANetRifle* PreviousRifle)
 {
-	OnCurrentRifleChanged.Broadcast(CurrentRifle);
+	ApplyCurrentRifle(PreviousRifle);
+}
+
+void ANetCharacter::AttachWeaponMeshes(ANetRifle* Weapon)
+{
+	if (!IsValid(Weapon))
+	{
+		return;
+	}
+
+	const FAttachmentTransformRules AttachmentRules(EAttachmentRule::SnapToTarget, false);
+
+	Weapon->GetFirstPersonMesh()->AttachToComponent(FirstPersonMesh, AttachmentRules, FirstPersonWeaponSocket);
+	Weapon->GetThirdPersonMesh()->AttachToComponent(GetMesh(), AttachmentRules, ThirdPersonWeaponSocket);
+	Weapon->GetThirdPersonMesh()->SetRelativeTransform(ThirdPersonWeaponAttachmentOffset);
+}
+
+void ANetCharacter::PlayFiringMontage(UAnimMontage* Montage)
+{
+	if (!Montage)
+	{
+		return;
+	}
+
+	if (UAnimInstance* FirstPersonAnimInstance = FirstPersonMesh->GetAnimInstance())
+	{
+		FirstPersonAnimInstance->Montage_Play(Montage);
+	}
+
+	if (UAnimInstance* ThirdPersonAnimInstance = GetMesh()->GetAnimInstance())
+	{
+		ThirdPersonAnimInstance->Montage_Play(Montage);
+	}
+}
+
+void ANetCharacter::AddWeaponRecoil(float Recoil)
+{
+	if (IsLocallyControlled())
+	{
+		AddControllerPitchInput(-Recoil);
+	}
+}
+
+void ANetCharacter::UpdateWeaponHUD(int32 CurrentAmmo, int32 MagazineSize)
+{
+	OnWeaponAmmoUpdated.Broadcast(CurrentAmmo, MagazineSize);
+}
+
+FVector ANetCharacter::GetWeaponTargetLocation()
+{
+	FVector TraceStart;
+	FRotator TraceRotation;
+	if (AController* ViewController = GetController())
+	{
+		ViewController->GetPlayerViewPoint(TraceStart, TraceRotation);
+	}
+	else
+	{
+		GetActorEyesViewPoint(TraceStart, TraceRotation);
+	}
+
+	const FVector TraceEnd = TraceStart + (TraceRotation.Vector() * MaxAimDistance);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NetWeaponTargetTrace), true, this);
+	QueryParams.AddIgnoredActor(this);
+	QueryParams.AddIgnoredActor(CurrentRifle);
+
+	FHitResult HitResult;
+	GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_WeaponTrace, QueryParams);
+	return HitResult.bBlockingHit ? HitResult.ImpactPoint : TraceEnd;
+}
+
+void ANetCharacter::AddWeaponClass(const TSubclassOf<ANetRifle>& WeaponClass)
+{
+	if (!HasAuthority())
+	{
+		UE_LOG(LogArena, Warning, TEXT("AddWeaponClass rejected for non-authority character '%s'."), *GetNameSafe(this));
+		return;
+	}
+
+	if (!WeaponClass || (CurrentRifle && CurrentRifle->IsA(WeaponClass)))
+	{
+		return;
+	}
+
+	FActorSpawnParameters SpawnParams;
+	SpawnParams.Owner = this;
+	SpawnParams.Instigator = this;
+	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	ANetRifle* AddedWeapon = GetWorld()->SpawnActor<ANetRifle>(WeaponClass, GetActorTransform(), SpawnParams);
+	if (!AddedWeapon)
+	{
+		return;
+	}
+
+	ANetRifle* PreviousRifle = CurrentRifle;
+	CurrentRifle = AddedWeapon;
+	ForceNetUpdate();
+
+	if (IsValid(PreviousRifle))
+	{
+		PreviousRifle->StopFiringOnServer();
+		OnWeaponDeactivated(PreviousRifle);
+		PreviousRifle->Destroy();
+	}
+
+	// A listen server also owns a local presentation and does not receive RepNotify callbacks.
+	if (GetNetMode() != NM_DedicatedServer)
+	{
+		ApplyCurrentRifle(nullptr);
+	}
+}
+
+void ANetCharacter::OnWeaponActivated(ANetRifle* Weapon)
+{
+	if (IsValid(Weapon))
+	{
+		if (Weapon->GetFirstPersonAnimInstanceClass())
+		{
+			FirstPersonMesh->SetAnimInstanceClass(Weapon->GetFirstPersonAnimInstanceClass());
+		}
+
+		if (Weapon->GetThirdPersonAnimInstanceClass())
+		{
+			GetMesh()->SetAnimInstanceClass(Weapon->GetThirdPersonAnimInstanceClass());
+		}
+
+		UpdateWeaponHUD(Weapon->GetCurrentAmmo(), Weapon->GetMagazineSize());
+	}
+}
+
+void ANetCharacter::OnWeaponDeactivated(ANetRifle* Weapon)
+{
+}
+
+void ANetCharacter::OnSemiWeaponRefire()
+{
+}
+
+void ANetCharacter::ApplyCurrentRifle(ANetRifle* PreviousRifle)
+{
+	if (IsValid(PreviousRifle) && PreviousRifle != CurrentRifle)
+	{
+		OnWeaponDeactivated(PreviousRifle);
+	}
+
+	if (IsValid(CurrentRifle))
+	{
+		AttachWeaponMeshes(CurrentRifle);
+		OnWeaponActivated(CurrentRifle);
+		OnCurrentRifleChanged.Broadcast(CurrentRifle);
+	}
+	else
+	{
+		OnCurrentRifleChanged.Broadcast(nullptr);
+	}
 }
 
 void ANetCharacter::ServerStopFiring_Implementation()

@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
+#include "Weapons/NetWeaponHolder.h"
 #include "NetCharacter.generated.h"
 
 class UInputComponent;
@@ -16,6 +17,7 @@ class UNetHealthComponent;
 struct FInputActionValue;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetCurrentRifleChangedSignature, ANetRifle*, CurrentRifle);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNetWeaponAmmoUpdatedSignature, int32, CurrentAmmo, int32, MagazineSize);
 
 // DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
@@ -23,7 +25,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetCurrentRifleChangedSignature, AN
  *  A basic first person character
  */
 UCLASS(abstract)
-class ANetCharacter : public ACharacter
+class ANetCharacter : public ACharacter, public INetWeaponHolder
 {
 	GENERATED_BODY()
 
@@ -64,6 +66,22 @@ protected:
 	/** Rifle class spawned for this character */
 	UPROPERTY(EditAnywhere, Category="Weapon")
 	TSubclassOf<ANetRifle> RifleClass;
+
+	/** First-person mesh socket used for equipped weapons. */
+	UPROPERTY(EditAnywhere, Category="Weapon")
+	FName FirstPersonWeaponSocket = FName("HandGrip_R");
+
+	/** Third-person mesh socket used for equipped weapons. */
+	UPROPERTY(EditAnywhere, Category="Weapon")
+	FName ThirdPersonWeaponSocket = FName("HandGrip_R");
+
+	/** Local correction applied after the third-person weapon snaps to its socket. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Weapon|Attachment")
+	FTransform ThirdPersonWeaponAttachmentOffset = FTransform(FRotator(-10.0f, 0.0f, 0.0f));
+
+	/** Maximum distance used when calculating the weapon target. */
+	UPROPERTY(EditAnywhere, Category="Weapon|Aim", meta=(ClampMin=0, Units="cm"))
+	float MaxAimDistance = 10000.0f;
 
 	/** Rifle currently owned by this character */
 	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_CurrentRifle, Category="Weapon")
@@ -127,6 +145,20 @@ protected:
 	void DoStopFiring();
 
 public:
+	//~Begin INetWeaponHolder interface
+	virtual void AttachWeaponMeshes(ANetRifle* Weapon) override;
+	virtual void PlayFiringMontage(UAnimMontage* Montage) override;
+	virtual void AddWeaponRecoil(float Recoil) override;
+	virtual void UpdateWeaponHUD(int32 CurrentAmmo, int32 MagazineSize) override;
+	virtual FVector GetWeaponTargetLocation() override;
+
+	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Weapon")
+	virtual void AddWeaponClass(const TSubclassOf<ANetRifle>& WeaponClass) override;
+
+	virtual void OnWeaponActivated(ANetRifle* Weapon) override;
+	virtual void OnWeaponDeactivated(ANetRifle* Weapon) override;
+	virtual void OnSemiWeaponRefire() override;
+	//~End INetWeaponHolder interface
 
 	/** Server-side start firing request from owning client. */
 	UFUNCTION(Server, Reliable)
@@ -162,8 +194,13 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Weapon")
 	FNetCurrentRifleChangedSignature OnCurrentRifleChanged;
 
+	UPROPERTY(BlueprintAssignable, Category="Weapon|Ammo")
+	FNetWeaponAmmoUpdatedSignature OnWeaponAmmoUpdated;
+
 private:
 	UFUNCTION()
-	void OnRep_CurrentRifle();
+	void OnRep_CurrentRifle(ANetRifle* PreviousRifle);
+
+	void ApplyCurrentRifle(ANetRifle* PreviousRifle);
 
 };
