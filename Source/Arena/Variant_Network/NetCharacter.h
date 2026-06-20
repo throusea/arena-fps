@@ -13,10 +13,11 @@ class USkeletalMeshComponent;
 class UCameraComponent;
 class UInputAction;
 class ANetRifle;
+class ANetWeaponBase;
 class UNetHealthComponent;
 struct FInputActionValue;
 
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetCurrentRifleChangedSignature, ANetRifle*, CurrentRifle);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetCurrentRifleChangedSignature, ANetWeaponBase*, CurrentRifle);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNetWeaponAmmoUpdatedSignature, int32, CurrentAmmo, int32, MagazineSize);
 
 // DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
@@ -36,6 +37,10 @@ class ANetCharacter : public ACharacter, public INetWeaponHolder
 	/** First person camera */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
 	UCameraComponent* FirstPersonCameraComponent;
+
+	/** Local camera activated when this character dies. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta=(AllowPrivateAccess="true"))
+	UCameraComponent* DeathCamera;
 
 	/** Replicated health state */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
@@ -65,7 +70,7 @@ protected:
 
 	/** Rifle class spawned for this character */
 	UPROPERTY(EditAnywhere, Category="Weapon")
-	TSubclassOf<ANetRifle> RifleClass;
+	TSubclassOf<ANetWeaponBase> RifleClass;
 
 	/** First-person mesh socket used for equipped weapons. */
 	UPROPERTY(EditAnywhere, Category="Weapon")
@@ -85,7 +90,7 @@ protected:
 
 	/** Rifle currently owned by this character */
 	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_CurrentRifle, Category="Weapon")
-	TObjectPtr<ANetRifle> CurrentRifle;
+	TObjectPtr<ANetWeaponBase> CurrentRifle;
 
 public:
 	ANetCharacter();
@@ -118,6 +123,10 @@ protected:
 	UFUNCTION()
 	void OnDeath();
 
+	/** Allows Blueprint to play local character death presentation. */
+	UFUNCTION(BlueprintImplementableEvent, Category="Character|Presentation", meta=(DisplayName="On Death"))
+	void BP_OnDeath();
+
 protected:
 
 	/** Gameplay initialization */
@@ -146,17 +155,17 @@ protected:
 
 public:
 	//~Begin INetWeaponHolder interface
-	virtual void AttachWeaponMeshes(ANetRifle* Weapon) override;
+	virtual void AttachWeaponMeshes(ANetWeaponBase* Weapon) override;
 	virtual void PlayFiringMontage(UAnimMontage* Montage) override;
 	virtual void AddWeaponRecoil(float Recoil) override;
 	virtual void UpdateWeaponHUD(int32 CurrentAmmo, int32 MagazineSize) override;
 	virtual FVector GetWeaponTargetLocation() override;
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Weapon")
-	virtual void AddWeaponClass(const TSubclassOf<ANetRifle>& WeaponClass) override;
+	virtual void AddWeaponClass(const TSubclassOf<ANetWeaponBase>& WeaponClass) override;
 
-	virtual void OnWeaponActivated(ANetRifle* Weapon) override;
-	virtual void OnWeaponDeactivated(ANetRifle* Weapon) override;
+	virtual void OnWeaponActivated(ANetWeaponBase* Weapon) override;
+	virtual void OnWeaponDeactivated(ANetWeaponBase* Weapon) override;
 	virtual void OnSemiWeaponRefire() override;
 	//~End INetWeaponHolder interface
 
@@ -181,11 +190,14 @@ public:
 	/** Returns first person camera component **/
 	UCameraComponent* GetFirstPersonCameraComponent() const { return FirstPersonCameraComponent; }
 
+	/** Returns the camera used for local death presentation. */
+	UCameraComponent* GetDeathCamera() const { return DeathCamera; }
+
 	/** Returns the replicated health component. */
 	UNetHealthComponent* GetHealthComponent() const { return HealthComponent; }
 
 	UFUNCTION(BlueprintPure, Category="Weapon")
-	ANetRifle* GetCurrentRifle() const { return CurrentRifle; }
+	ANetWeaponBase* GetCurrentRifle() const { return CurrentRifle; }
 
 	/** Returns true once this character has died. */
 	UFUNCTION(BlueprintPure, Category="Health")
@@ -199,8 +211,8 @@ public:
 
 private:
 	UFUNCTION()
-	void OnRep_CurrentRifle(ANetRifle* PreviousRifle);
+	void OnRep_CurrentRifle(ANetWeaponBase* PreviousRifle);
 
-	void ApplyCurrentRifle(ANetRifle* PreviousRifle);
+	void ApplyCurrentRifle(ANetWeaponBase* PreviousRifle);
 
 };

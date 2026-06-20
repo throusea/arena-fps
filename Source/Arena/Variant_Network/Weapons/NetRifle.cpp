@@ -9,16 +9,19 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Math/RotationMatrix.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 
-ANetRifle::ANetRifle()
+ANetWeaponBase::ANetWeaponBase()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
 	bNetUseOwnerRelevancy = true;
 
@@ -35,31 +38,46 @@ ANetRifle::ANetRifle()
 	ThirdPersonMesh->SetOwnerNoSee(true);
 }
 
-void ANetRifle::BeginPlay()
+void ANetWeaponBase::BeginPlay()
 {
 	Super::BeginPlay();
 
 	WeaponOwner = Cast<INetWeaponHolder>(GetOwner());
 	PawnOwner = Cast<APawn>(GetOwner());
+	SetActorTickEnabled(HasAuthority());
+	CurrentSpreadAngle = GetEffectiveMinSpreadAngle();
 
 	if (HasAuthority())
 	{
 		CurrentAmmo = MagazineSize;
+		UpdateSpread(0.0f);
 	}
 
 	BroadcastAmmoChanged();
+	BroadcastSpreadChanged();
 }
 
-void ANetRifle::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+void ANetWeaponBase::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (HasAuthority())
+	{
+		UpdateSpread(DeltaSeconds);
+	}
+}
+
+void ANetWeaponBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 
-	DOREPLIFETIME(ANetRifle, LastHitResult);
-	DOREPLIFETIME(ANetRifle, MagazineSize);
-	DOREPLIFETIME(ANetRifle, CurrentAmmo);
+	DOREPLIFETIME(ANetWeaponBase, LastHitResult);
+	DOREPLIFETIME(ANetWeaponBase, MagazineSize);
+	DOREPLIFETIME(ANetWeaponBase, CurrentAmmo);
+	DOREPLIFETIME_CONDITION(ANetWeaponBase, CurrentSpreadAngle, COND_OwnerOnly);
 }
 
-void ANetRifle::EndPlay(const EEndPlayReason::Type EndPlayReason)
+void ANetWeaponBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (UWorld* World = GetWorld())
 	{
@@ -69,9 +87,14 @@ void ANetRifle::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-void ANetRifle::StartFiringOnServer()
+void ANetWeaponBase::StartFiringOnServer()
 {
 	if (!HasAuthority())
+	{
+		return;
+	}
+
+	if (bWantsToFire)
 	{
 		return;
 	}
@@ -80,7 +103,7 @@ void ANetRifle::StartFiringOnServer()
 	FireOnServer();
 }
 
-void ANetRifle::StopFiringOnServer()
+void ANetWeaponBase::StopFiringOnServer()
 {
 	if (!HasAuthority())
 	{
@@ -90,8 +113,13 @@ void ANetRifle::StopFiringOnServer()
 	bWantsToFire = false;
 }
 
-void ANetRifle::MulticastPlayFireEffects_Implementation(const FNetWeaponShotResult& ShotResult)
+void ANetWeaponBase::MulticastPlayFireEffects_Implementation(const FNetWeaponFireResult& FireResult)
 {
+	if (!HasAuthority() && PawnOwner && PawnOwner->IsLocallyControlled())
+	{
+		SetCurrentSpreadAngle(FireResult.SpreadAngle);
+	}
+
 	if (WeaponOwner)
 	{
 		WeaponOwner->PlayFiringMontage(FiringMontage);
@@ -115,8 +143,8 @@ void ANetRifle::MulticastPlayFireEffects_Implementation(const FNetWeaponShotResu
 	const bool bHasMuzzleSocket = MuzzleMesh && MuzzleMesh->DoesSocketExist(MuzzleSocketName);
 	const FVector MuzzleLocation = bHasMuzzleSocket
 		? MuzzleMesh->GetSocketLocation(MuzzleSocketName)
-		: FVector(ShotResult.TraceStart);
-	const FVector ShotDirection = (FVector(ShotResult.TraceEnd) - MuzzleLocation).GetSafeNormal();
+		: FVector(FireResult.Origin);
+	const FVector ShotDirection = FVector(FireResult.Direction).GetSafeNormal();
 	const FVector EffectLocation = MuzzleLocation + (ShotDirection * MuzzleOffset);
 	const FRotator ShotRotation = ShotDirection.IsNearlyZero()
 		? FRotator::ZeroRotator
@@ -146,36 +174,44 @@ void ANetRifle::MulticastPlayFireEffects_Implementation(const FNetWeaponShotResu
 		UGameplayStatics::PlaySoundAtLocation(this, FireSound, EffectLocation);
 	}
 
-	BP_OnWeaponFired(ShotResult);
-	OnWeaponFired.Broadcast(ShotResult);
+	BP_OnWeaponFired(FireResult);
+	OnWeaponFired.Broadcast(FireResult);
 }
 
-void ANetRifle::MulticastPlayHitEffects_Implementation(const FNetWeaponShotResult& ShotResult)
+void ANetWeaponBase::MulticastPlayHitEffects_Implementation(const FNetWeaponImpactResult& ImpactResult)
 {
 	if (ImpactSound)
 	{
-		UGameplayStatics::PlaySoundAtLocation(this, ImpactSound, ShotResult.TraceEnd);
+		UGameplayStatics::PlaySoundAtLocation(this, ImpactSound, ImpactResult.ImpactLocation);
 	}
 
-	BP_OnWeaponHit(ShotResult);
-	OnWeaponHit.Broadcast(ShotResult);
+	BP_OnWeaponHit(ImpactResult);
+	OnWeaponHit.Broadcast(ImpactResult);
 }
 
-void ANetRifle::FireOnServer()
+void ANetWeaponBase::FireOnServer()
 {
-	if (!bWantsToFire || !bCanFire || (bConsumeAmmo && CurrentAmmo <= 0))
+	if (!bWantsToFire || !bCanFire || (bConsumeAmmo && CurrentAmmo <= 0) || !CanFireAuthoritativeShot())
 	{
 		return;
 	}
 
 	bCanFire = false;
 	LastHitResult = FHitResult();
+	IncreaseSpreadForShot();
 
-	const FNetWeaponShotResult ShotResult = FireAuthoritativeShot();
-	MulticastPlayFireEffects(ShotResult);
-	if (ShotResult.bBlockingHit)
+	FNetWeaponFireResult FireResult;
+	FNetWeaponImpactResult ImpactResult;
+	if (!FireAuthoritativeShot(FireResult, ImpactResult))
 	{
-		MulticastPlayHitEffects(ShotResult);
+		bCanFire = true;
+		return;
+	}
+
+	MulticastPlayFireEffects(FireResult);
+	if (ImpactResult.bBlockingHit)
+	{
+		MulticastPlayHitEffects(ImpactResult);
 	}
 	if (bConsumeAmmo)
 	{
@@ -183,14 +219,15 @@ void ANetRifle::FireOnServer()
 		BroadcastAmmoChanged();
 	}
 
-	GetWorld()->GetTimerManager().SetTimer(FireCooldownTimer, this, &ANetRifle::FireCooldownExpired, FireCooldown, false);
+	const float EffectiveCooldown = FMath::Max(FireCooldown, 0.01f);
+	GetWorld()->GetTimerManager().SetTimer(FireCooldownTimer, this, &ANetWeaponBase::FireCooldownExpired, EffectiveCooldown, false);
 }
 
-void ANetRifle::FireCooldownExpired()
+void ANetWeaponBase::FireCooldownExpired()
 {
 	bCanFire = true;
 
-	if (WeaponOwner)
+	if (!bFullAuto && WeaponOwner)
 	{
 		WeaponOwner->OnSemiWeaponRefire();
 	}
@@ -201,77 +238,88 @@ void ANetRifle::FireCooldownExpired()
 	}
 }
 
-bool ANetRifle::TraceFromCamera(FHitResult& OutHitResult) const
+bool ANetWeaponBase::CanFireAuthoritativeShot() const
+{
+	return WeaponOwner != nullptr && IsValid(PawnOwner) && IsValid(GetWorld());
+}
+
+bool ANetWeaponBase::CalculateShotPath(FVector& OutStart, FVector& OutDirection, FVector& OutEnd) const
 {
 	if (!WeaponOwner || !PawnOwner)
 	{
 		return false;
 	}
 
-	FVector TraceStart;
 	FRotator TraceRotation;
 	if (AController* Controller = PawnOwner->GetController())
 	{
-		Controller->GetPlayerViewPoint(TraceStart, TraceRotation);
+		Controller->GetPlayerViewPoint(OutStart, TraceRotation);
 	}
 	else
 	{
-		PawnOwner->GetActorEyesViewPoint(TraceStart, TraceRotation);
+		PawnOwner->GetActorEyesViewPoint(OutStart, TraceRotation);
 	}
 
 	const FVector TargetLocation = WeaponOwner->GetWeaponTargetLocation();
-	FVector ShotDirection = (TargetLocation - TraceStart).GetSafeNormal();
-	if (ShotDirection.IsNearlyZero())
+	OutDirection = (TargetLocation - OutStart).GetSafeNormal();
+	if (OutDirection.IsNearlyZero())
 	{
-		ShotDirection = TraceRotation.Vector();
+		OutDirection = TraceRotation.Vector();
 	}
 
-	if (SpreadHalfAngle > 0.0f)
+	if (CurrentSpreadAngle > 0.0f)
 	{
-		ShotDirection = FMath::VRandCone(ShotDirection, FMath::DegreesToRadians(SpreadHalfAngle));
+		OutDirection = FMath::VRandCone(OutDirection, FMath::DegreesToRadians(CurrentSpreadAngle));
 	}
 
-	const FVector TraceEnd = TraceStart + (ShotDirection * TraceDistance);
+	OutEnd = OutStart + (OutDirection * TraceDistance);
+	return true;
+}
+
+bool ANetRifle::FireAuthoritativeShot(FNetWeaponFireResult& OutFireResult, FNetWeaponImpactResult& OutImpactResult)
+{
+	LastHitResult = FHitResult();
+
+	FVector TraceStart;
+	FVector ShotDirection;
+	FVector TraceEnd;
+	if (!CalculateShotPath(TraceStart, ShotDirection, TraceEnd))
+	{
+		return false;
+	}
 
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(NetRifleTrace), true, PawnOwner);
 	QueryParams.AddIgnoredActor(this);
 	QueryParams.AddIgnoredActor(PawnOwner);
 
-	const bool bHit = GetWorld()->LineTraceSingleByChannel(OutHitResult, TraceStart, TraceEnd, TraceChannel, QueryParams);
-	OutHitResult.TraceStart = TraceStart;
-	OutHitResult.TraceEnd = TraceEnd;
+	const bool bHit = GetWorld()->LineTraceSingleByChannel(LastHitResult, TraceStart, TraceEnd, TraceChannel, QueryParams);
+	LastHitResult.TraceStart = TraceStart;
+	LastHitResult.TraceEnd = TraceEnd;
+	const FVector ShotEnd = bHit ? LastHitResult.ImpactPoint : TraceEnd;
 
-	return bHit;
-}
-
-FNetWeaponShotResult ANetRifle::FireAuthoritativeShot()
-{
-	LastHitResult = FHitResult();
-
-	const bool bHit = TraceFromCamera(LastHitResult);
-	const FVector TraceEnd = bHit ? LastHitResult.ImpactPoint : LastHitResult.TraceEnd;
-
-	FNetWeaponShotResult ShotResult;
-	ShotResult.TraceStart = LastHitResult.TraceStart;
-	ShotResult.TraceEnd = TraceEnd;
-	ShotResult.ImpactNormal = bHit ? LastHitResult.ImpactNormal : FVector::ZeroVector;
-	ShotResult.HitActor = bHit ? LastHitResult.GetActor() : nullptr;
-	ShotResult.bBlockingHit = bHit && FireType == ENetWeaponFireType::Hitscan;
-
-	if (FireType == ENetWeaponFireType::Projectile)
-	{
-		FireProjectileOnServer(ShotResult);
-		LastHitResult = FHitResult();
-		return ShotResult;
-	}
+	OutFireResult.Origin = TraceStart;
+	OutFireResult.Direction = ShotDirection;
+	OutFireResult.SpreadAngle = CurrentSpreadAngle;
 
 	if (bHit)
 	{
+		OutImpactResult.ImpactLocation = LastHitResult.ImpactPoint;
+		OutImpactResult.ImpactNormal = LastHitResult.ImpactNormal;
+		OutImpactResult.HitActor = LastHitResult.GetActor();
+		OutImpactResult.bBlockingHit = true;
+
 		if (AActor* HitActor = LastHitResult.GetActor())
 		{
 			AController* InstigatorController = PawnOwner ? PawnOwner->GetController() : nullptr;
-			const float AppliedDamage = UGameplayStatics::ApplyDamage(HitActor, Damage, InstigatorController, this, nullptr);
-			ShotResult.bDamagedActor = AppliedDamage > 0.0f;
+			const float AppliedDamage = UGameplayStatics::ApplyPointDamage(
+				HitActor,
+				Damage,
+				ShotDirection,
+				LastHitResult,
+				InstigatorController,
+				this,
+				nullptr);
+			OutImpactResult.bDamagedActor = AppliedDamage > 0.0f;
 		}
 	}
 
@@ -281,35 +329,22 @@ FNetWeaponShotResult ANetRifle::FireAuthoritativeShot()
 		GEngine->AddOnScreenDebugMessage(7, 1.0f, bHit ? FColor::Red : FColor::Yellow, FString::Printf(TEXT("Server rifle fired. Hit: %s"), *HitActorName));
 	}
 
-	DrawDebugLine(GetWorld(), LastHitResult.TraceStart, TraceEnd, bHit ? FColor::Red : FColor::Yellow, false, DebugTraceDuration, 0, 1.0f);
+	DrawDebugLine(GetWorld(), TraceStart, ShotEnd, bHit ? FColor::Red : FColor::Yellow, false, DebugTraceDuration, 0, 1.0f);
 
-	return ShotResult;
+	return true;
 }
 
-void ANetRifle::FireProjectileOnServer(const FNetWeaponShotResult& ShotResult)
-{
-	if (!ProjectileClass)
-	{
-		return;
-	}
-
-	const FVector ShotDirection = (ShotResult.TraceEnd - ShotResult.TraceStart).GetSafeNormal();
-	const FVector SpawnLocation = ShotResult.TraceStart + (ShotDirection * MuzzleOffset);
-
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = this;
-	SpawnParams.Instigator = PawnOwner;
-	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	GetWorld()->SpawnActor<AActor>(ProjectileClass, SpawnLocation, ShotDirection.Rotation(), SpawnParams);
-}
-
-void ANetRifle::OnRep_CurrentAmmo()
+void ANetWeaponBase::OnRep_CurrentAmmo()
 {
 	BroadcastAmmoChanged();
 }
 
-void ANetRifle::BroadcastAmmoChanged()
+void ANetWeaponBase::OnRep_CurrentSpreadAngle()
+{
+	BroadcastSpreadChanged();
+}
+
+void ANetWeaponBase::BroadcastAmmoChanged()
 {
 	OnAmmoChanged.Broadcast(CurrentAmmo, MagazineSize);
 	BP_OnAmmoChanged(CurrentAmmo, MagazineSize);
@@ -318,4 +353,93 @@ void ANetRifle::BroadcastAmmoChanged()
 	{
 		WeaponOwner->UpdateWeaponHUD(CurrentAmmo, MagazineSize);
 	}
+}
+
+float ANetWeaponBase::GetNormalizedSpread() const
+{
+	const float EffectiveMinSpread = GetEffectiveMinSpreadAngle();
+	const float SpreadRange = GetEffectiveMaxSpreadAngle() - EffectiveMinSpread;
+	return SpreadRange > KINDA_SMALL_NUMBER
+		? FMath::Clamp((CurrentSpreadAngle - EffectiveMinSpread) / SpreadRange, 0.0f, 1.0f)
+		: 0.0f;
+}
+
+void ANetWeaponBase::BroadcastSpreadChanged()
+{
+	const float NormalizedSpread = GetNormalizedSpread();
+	OnSpreadChanged.Broadcast(CurrentSpreadAngle, NormalizedSpread);
+	BP_OnSpreadChanged(CurrentSpreadAngle, NormalizedSpread);
+}
+
+void ANetWeaponBase::IncreaseSpreadForShot()
+{
+	FiringSpread = FMath::Clamp(
+		FiringSpread + SpreadIncreasePerShot,
+		0.0f,
+		GetEffectiveMaxSpreadAngle() - GetEffectiveMinSpreadAngle());
+	UpdateSpread(0.0f);
+	ForceNetUpdate();
+}
+
+void ANetWeaponBase::UpdateSpread(float DeltaSeconds)
+{
+	const bool bMagazineEmpty = bConsumeAmmo && CurrentAmmo <= 0;
+	const bool bShouldRecover = !bWantsToFire || !bFullAuto || bMagazineEmpty;
+	if (bShouldRecover && SpreadRecoverySpeed > 0.0f)
+	{
+		FiringSpread = FMath::FInterpTo(FiringSpread, 0.0f, DeltaSeconds, SpreadRecoverySpeed);
+		if (FiringSpread < KINDA_SMALL_NUMBER)
+		{
+			FiringSpread = 0.0f;
+		}
+	}
+
+	SetCurrentSpreadAngle(CalculateStateSpread() + FiringSpread);
+}
+
+float ANetWeaponBase::CalculateStateSpread() const
+{
+	float StateSpread = GetEffectiveMinSpreadAngle();
+	if (!PawnOwner)
+	{
+		return StateSpread;
+	}
+
+	const float HorizontalSpeed = PawnOwner->GetVelocity().Size2D();
+	if (HorizontalSpeed > MovingSpeedThreshold)
+	{
+		const UPawnMovementComponent* MovementComponent = PawnOwner->GetMovementComponent();
+		const float MaxMovementSpeed = MovementComponent ? MovementComponent->GetMaxSpeed() : HorizontalSpeed;
+		const float MovementAlpha = MaxMovementSpeed > MovingSpeedThreshold
+			? FMath::Clamp((HorizontalSpeed - MovingSpeedThreshold) / (MaxMovementSpeed - MovingSpeedThreshold), 0.0f, 1.0f)
+			: 1.0f;
+		StateSpread += MovementSpread * MovementAlpha;
+	}
+
+	if (const ACharacter* CharacterOwner = Cast<ACharacter>(PawnOwner))
+	{
+		if (const UCharacterMovementComponent* CharacterMovement = CharacterOwner->GetCharacterMovement();
+			CharacterMovement && CharacterMovement->IsFalling())
+		{
+			StateSpread += AirborneSpread;
+		}
+
+	}
+
+	return StateSpread;
+}
+
+void ANetWeaponBase::SetCurrentSpreadAngle(float NewSpreadAngle)
+{
+	const float ClampedSpread = FMath::Clamp(
+		NewSpreadAngle,
+		GetEffectiveMinSpreadAngle(),
+		GetEffectiveMaxSpreadAngle());
+	if (FMath::IsNearlyEqual(CurrentSpreadAngle, ClampedSpread, 0.001f))
+	{
+		return;
+	}
+
+	CurrentSpreadAngle = ClampedSpread;
+	BroadcastSpreadChanged();
 }
