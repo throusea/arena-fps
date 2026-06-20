@@ -9,7 +9,10 @@
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "Math/RotationMatrix.h"
@@ -18,7 +21,7 @@
 
 ANetRifle::ANetRifle()
 {
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 	bReplicates = true;
 	bNetUseOwnerRelevancy = true;
 
@@ -41,13 +44,27 @@ void ANetRifle::BeginPlay()
 
 	WeaponOwner = Cast<INetWeaponHolder>(GetOwner());
 	PawnOwner = Cast<APawn>(GetOwner());
+	SetActorTickEnabled(HasAuthority());
+	CurrentSpreadAngle = GetEffectiveMinSpreadAngle();
 
 	if (HasAuthority())
 	{
 		CurrentAmmo = MagazineSize;
+		UpdateSpread(0.0f);
 	}
 
 	BroadcastAmmoChanged();
+	BroadcastSpreadChanged();
+}
+
+void ANetRifle::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+
+	if (HasAuthority())
+	{
+		UpdateSpread(DeltaSeconds);
+	}
 }
 
 void ANetRifle::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -57,6 +74,7 @@ void ANetRifle::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetim
 	DOREPLIFETIME(ANetRifle, LastHitResult);
 	DOREPLIFETIME(ANetRifle, MagazineSize);
 	DOREPLIFETIME(ANetRifle, CurrentAmmo);
+	DOREPLIFETIME_CONDITION(ANetRifle, CurrentSpreadAngle, COND_OwnerOnly);
 }
 
 void ANetRifle::EndPlay(const EEndPlayReason::Type EndPlayReason)
@@ -92,6 +110,11 @@ void ANetRifle::StopFiringOnServer()
 
 void ANetRifle::MulticastPlayFireEffects_Implementation(const FNetWeaponShotResult& ShotResult)
 {
+	if (!HasAuthority() && PawnOwner && PawnOwner->IsLocallyControlled())
+	{
+		SetCurrentSpreadAngle(ShotResult.SpreadAngle);
+	}
+
 	if (WeaponOwner)
 	{
 		WeaponOwner->PlayFiringMontage(FiringMontage);
@@ -170,6 +193,7 @@ void ANetRifle::FireOnServer()
 
 	bCanFire = false;
 	LastHitResult = FHitResult();
+	IncreaseSpreadForShot();
 
 	const FNetWeaponShotResult ShotResult = FireAuthoritativeShot();
 	MulticastPlayFireEffects(ShotResult);
@@ -226,9 +250,9 @@ bool ANetRifle::TraceFromCamera(FHitResult& OutHitResult) const
 		ShotDirection = TraceRotation.Vector();
 	}
 
-	if (SpreadHalfAngle > 0.0f)
+	if (CurrentSpreadAngle > 0.0f)
 	{
-		ShotDirection = FMath::VRandCone(ShotDirection, FMath::DegreesToRadians(SpreadHalfAngle));
+		ShotDirection = FMath::VRandCone(ShotDirection, FMath::DegreesToRadians(CurrentSpreadAngle));
 	}
 
 	const FVector TraceEnd = TraceStart + (ShotDirection * TraceDistance);
@@ -257,6 +281,7 @@ FNetWeaponShotResult ANetRifle::FireAuthoritativeShot()
 	ShotResult.ImpactNormal = bHit ? LastHitResult.ImpactNormal : FVector::ZeroVector;
 	ShotResult.HitActor = bHit ? LastHitResult.GetActor() : nullptr;
 	ShotResult.bBlockingHit = bHit && FireType == ENetWeaponFireType::Hitscan;
+	ShotResult.SpreadAngle = CurrentSpreadAngle;
 
 	if (FireType == ENetWeaponFireType::Projectile)
 	{
@@ -309,6 +334,11 @@ void ANetRifle::OnRep_CurrentAmmo()
 	BroadcastAmmoChanged();
 }
 
+void ANetRifle::OnRep_CurrentSpreadAngle()
+{
+	BroadcastSpreadChanged();
+}
+
 void ANetRifle::BroadcastAmmoChanged()
 {
 	OnAmmoChanged.Broadcast(CurrentAmmo, MagazineSize);
@@ -318,4 +348,93 @@ void ANetRifle::BroadcastAmmoChanged()
 	{
 		WeaponOwner->UpdateWeaponHUD(CurrentAmmo, MagazineSize);
 	}
+}
+
+float ANetRifle::GetNormalizedSpread() const
+{
+	const float EffectiveMinSpread = GetEffectiveMinSpreadAngle();
+	const float SpreadRange = GetEffectiveMaxSpreadAngle() - EffectiveMinSpread;
+	return SpreadRange > KINDA_SMALL_NUMBER
+		? FMath::Clamp((CurrentSpreadAngle - EffectiveMinSpread) / SpreadRange, 0.0f, 1.0f)
+		: 0.0f;
+}
+
+void ANetRifle::BroadcastSpreadChanged()
+{
+	const float NormalizedSpread = GetNormalizedSpread();
+	OnSpreadChanged.Broadcast(CurrentSpreadAngle, NormalizedSpread);
+	BP_OnSpreadChanged(CurrentSpreadAngle, NormalizedSpread);
+}
+
+void ANetRifle::IncreaseSpreadForShot()
+{
+	FiringSpread = FMath::Clamp(
+		FiringSpread + SpreadIncreasePerShot,
+		0.0f,
+		GetEffectiveMaxSpreadAngle() - GetEffectiveMinSpreadAngle());
+	UpdateSpread(0.0f);
+	ForceNetUpdate();
+}
+
+void ANetRifle::UpdateSpread(float DeltaSeconds)
+{
+	const bool bMagazineEmpty = bConsumeAmmo && CurrentAmmo <= 0;
+	const bool bShouldRecover = !bWantsToFire || !bFullAuto || bMagazineEmpty;
+	if (bShouldRecover && SpreadRecoverySpeed > 0.0f)
+	{
+		FiringSpread = FMath::FInterpTo(FiringSpread, 0.0f, DeltaSeconds, SpreadRecoverySpeed);
+		if (FiringSpread < KINDA_SMALL_NUMBER)
+		{
+			FiringSpread = 0.0f;
+		}
+	}
+
+	SetCurrentSpreadAngle(CalculateStateSpread() + FiringSpread);
+}
+
+float ANetRifle::CalculateStateSpread() const
+{
+	float StateSpread = GetEffectiveMinSpreadAngle();
+	if (!PawnOwner)
+	{
+		return StateSpread;
+	}
+
+	const float HorizontalSpeed = PawnOwner->GetVelocity().Size2D();
+	if (HorizontalSpeed > MovingSpeedThreshold)
+	{
+		const UPawnMovementComponent* MovementComponent = PawnOwner->GetMovementComponent();
+		const float MaxMovementSpeed = MovementComponent ? MovementComponent->GetMaxSpeed() : HorizontalSpeed;
+		const float MovementAlpha = MaxMovementSpeed > MovingSpeedThreshold
+			? FMath::Clamp((HorizontalSpeed - MovingSpeedThreshold) / (MaxMovementSpeed - MovingSpeedThreshold), 0.0f, 1.0f)
+			: 1.0f;
+		StateSpread += MovementSpread * MovementAlpha;
+	}
+
+	if (const ACharacter* CharacterOwner = Cast<ACharacter>(PawnOwner))
+	{
+		if (const UCharacterMovementComponent* CharacterMovement = CharacterOwner->GetCharacterMovement();
+			CharacterMovement && CharacterMovement->IsFalling())
+		{
+			StateSpread += AirborneSpread;
+		}
+
+	}
+
+	return StateSpread;
+}
+
+void ANetRifle::SetCurrentSpreadAngle(float NewSpreadAngle)
+{
+	const float ClampedSpread = FMath::Clamp(
+		NewSpreadAngle,
+		GetEffectiveMinSpreadAngle(),
+		GetEffectiveMaxSpreadAngle());
+	if (FMath::IsNearlyEqual(CurrentSpreadAngle, ClampedSpread, 0.001f))
+	{
+		return;
+	}
+
+	CurrentSpreadAngle = ClampedSpread;
+	BroadcastSpreadChanged();
 }

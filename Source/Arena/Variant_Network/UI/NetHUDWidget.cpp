@@ -6,6 +6,7 @@
 #include "Variant_Network/NetGameState.h"
 #include "Variant_Network/NetPlayerStateBase.h"
 #include "Variant_Network/Weapons/NetRifle.h"
+#include "Components/Widget.h"
 #include "GameFramework/PlayerController.h"
 
 void UNetHUDWidget::NativeConstruct()
@@ -31,6 +32,7 @@ void UNetHUDWidget::RefreshHUD()
 	RefreshVictoryState();
 	RefreshAmmo();
 	RefreshWeaponName();
+	RefreshSpread();
 }
 
 void UNetHUDWidget::HandleHealthChanged(float Health)
@@ -56,6 +58,7 @@ void UNetHUDWidget::HandleCurrentRifleChanged(ANetRifle* CurrentRifle)
 	BindToRifle(CurrentRifle);
 	RefreshAmmo();
 	RefreshWeaponName();
+	RefreshSpread();
 }
 
 void UNetHUDWidget::HandleAmmoChanged(int32 CurrentAmmo, int32 MagazineSize)
@@ -73,6 +76,23 @@ void UNetHUDWidget::HandleWeaponHit(const FNetWeaponShotResult& ShotResult)
 	if (ShotResult.bDamagedActor)
 	{
 		BP_OnHitConfirmed(ShotResult);
+	}
+}
+
+void UNetHUDWidget::HandleSpreadChanged(float SpreadAngle, float NormalizedSpread)
+{
+	BP_OnCrosshairSpreadChanged(SpreadAngle, NormalizedSpread);
+}
+
+void UNetHUDWidget::BP_OnCrosshairSpreadChanged_Implementation(float SpreadAngle, float NormalizedSpread)
+{
+	if (CrossHair)
+	{
+		const float CrosshairScale = FMath::Lerp(
+			MinCrosshairScale,
+			MaxCrosshairScale,
+			FMath::Clamp(NormalizedSpread, 0.0f, 1.0f));
+		CrossHair->SetRenderScale(FVector2D(CrosshairScale));
 	}
 }
 
@@ -106,6 +126,7 @@ void UNetHUDWidget::UnbindFromDataSources()
 		Rifle->OnAmmoChanged.RemoveDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
 		Rifle->OnWeaponFired.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponFired);
 		Rifle->OnWeaponHit.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponHit);
+		Rifle->OnSpreadChanged.RemoveDynamic(this, &UNetHUDWidget::HandleSpreadChanged);
 	}
 
 	if (ANetPlayerStateBase* PlayerState = ObservedPlayerState.Get())
@@ -175,6 +196,7 @@ void UNetHUDWidget::BindToRifle(ANetRifle* NewRifle)
 		OldRifle->OnAmmoChanged.RemoveDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
 		OldRifle->OnWeaponFired.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponFired);
 		OldRifle->OnWeaponHit.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponHit);
+		OldRifle->OnSpreadChanged.RemoveDynamic(this, &UNetHUDWidget::HandleSpreadChanged);
 	}
 
 	ObservedRifle = NewRifle;
@@ -184,6 +206,7 @@ void UNetHUDWidget::BindToRifle(ANetRifle* NewRifle)
 		NewRifle->OnAmmoChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
 		NewRifle->OnWeaponFired.AddUniqueDynamic(this, &UNetHUDWidget::HandleWeaponFired);
 		NewRifle->OnWeaponHit.AddUniqueDynamic(this, &UNetHUDWidget::HandleWeaponHit);
+		NewRifle->OnSpreadChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleSpreadChanged);
 	}
 }
 
@@ -264,4 +287,12 @@ void UNetHUDWidget::RefreshWeaponName()
 {
 	const ANetRifle* Rifle = ObservedRifle.Get();
 	BP_OnWeaponNameChanged(Rifle ? Rifle->GetWeaponName() : FText::GetEmpty());
+}
+
+void UNetHUDWidget::RefreshSpread()
+{
+	const ANetRifle* Rifle = ObservedRifle.Get();
+	BP_OnCrosshairSpreadChanged(
+		Rifle ? Rifle->GetCurrentSpreadAngle() : 0.0f,
+		Rifle ? Rifle->GetNormalizedSpread() : 0.0f);
 }

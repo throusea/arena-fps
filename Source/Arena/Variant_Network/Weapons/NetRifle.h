@@ -46,9 +46,14 @@ struct ARENA_API FNetWeaponShotResult
 	/** True when the server applied positive damage to the hit actor. */
 	UPROPERTY(BlueprintReadOnly, Category="Weapon")
 	bool bDamagedActor = false;
+
+	/** Server-authoritative half-angle used for this shot, in degrees. */
+	UPROPERTY(BlueprintReadOnly, Category="Weapon")
+	float SpreadAngle = 0.0f;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNetAmmoChangedSignature, int32, CurrentAmmo, int32, MagazineSize);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FNetWeaponSpreadChangedSignature, float, SpreadAngle, float, NormalizedSpread);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetWeaponFiredSignature, const FNetWeaponShotResult&, ShotResult);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetWeaponHitSignature, const FNetWeaponShotResult&, ShotResult);
 
@@ -63,6 +68,7 @@ class ARENA_API ANetRifle : public AActor
 public:
 	ANetRifle();
 
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** Start firing the rifle on Server. */
@@ -97,6 +103,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Weapon")
 	ENetWeaponFireType GetFireType() const { return FireType; }
 
+	UFUNCTION(BlueprintPure, Category="Weapon|Spread")
+	float GetCurrentSpreadAngle() const { return CurrentSpreadAngle; }
+
+	UFUNCTION(BlueprintPure, Category="Weapon|Spread")
+	float GetNormalizedSpread() const;
+
 	USkeletalMeshComponent* GetFirstPersonMesh() const { return FirstPersonMesh; }
 	USkeletalMeshComponent* GetThirdPersonMesh() const { return ThirdPersonMesh; }
 	TSubclassOf<UAnimInstance> GetFirstPersonAnimInstanceClass() const { return FirstPersonAnimInstanceClass; }
@@ -110,6 +122,9 @@ public:
 
 	UPROPERTY(BlueprintAssignable, Category="Weapon|Effects")
 	FNetWeaponHitSignature OnWeaponHit;
+
+	UPROPERTY(BlueprintAssignable, Category="Weapon|Spread")
+	FNetWeaponSpreadChangedSignature OnSpreadChanged;
 
 protected:
 	virtual void BeginPlay() override;
@@ -139,6 +154,9 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category="Weapon|Ammo", meta=(DisplayName="Weapon Ammo Changed"))
 	void BP_OnAmmoChanged(int32 NewCurrentAmmo, int32 NewMagazineSize);
 
+	UFUNCTION(BlueprintImplementableEvent, Category="Weapon|Spread", meta=(DisplayName="Weapon Spread Changed"))
+	void BP_OnSpreadChanged(float NewSpreadAngle, float NormalizedSpread);
+
 protected:
 	/** Player-facing weapon name displayed by the HUD. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Weapon")
@@ -164,9 +182,37 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon", meta=(ClampMin=0))
 	float Damage = 20.0f;
 
-	/** Half-angle of the server-authoritative shot cone. */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Aim", meta=(ClampMin=0, ClampMax=90, Units="Degrees"))
-	float SpreadHalfAngle = 0.0f;
+	/** Minimum half-angle of the server-authoritative shot cone. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Spread", meta=(ClampMin=0, ClampMax=90, Units="Degrees"))
+	float MinSpreadAngle = 0.25f;
+
+	/** Maximum final half-angle after all spread penalties. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Spread", meta=(ClampMin=0, ClampMax=90, Units="Degrees"))
+	float MaxSpreadAngle = 6.0f;
+
+	/** Additional spread accumulated by each shot. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Spread", meta=(ClampMin=0, ClampMax=90, Units="Degrees"))
+	float SpreadIncreasePerShot = 0.35f;
+
+	/** Interpolation speed used to recover firing spread after firing stops. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Spread", meta=(ClampMin=0))
+	float SpreadRecoverySpeed = 5.0f;
+
+	/** Maximum movement penalty, reached at the owner's maximum movement speed. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Spread", meta=(ClampMin=0, ClampMax=90, Units="Degrees"))
+	float MovementSpread = 1.5f;
+
+	/** Additional spread while the owner is airborne. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Spread", meta=(ClampMin=0, ClampMax=90, Units="Degrees"))
+	float AirborneSpread = 2.0f;
+
+	/** Speeds below this threshold are treated as standing still. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Weapon|Spread", meta=(ClampMin=0, Units="cm/s"))
+	float MovingSpeedThreshold = 10.0f;
+
+	/** Current final half-angle after state and firing modifiers. */
+	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_CurrentSpreadAngle, BlueprintReadOnly, Category="Weapon|Spread")
+	float CurrentSpreadAngle = 0.25f;
 
 	UPROPERTY(EditAnywhere, Replicated, BlueprintReadOnly, Category="Weapon|Ammo", meta=(ClampMin=1))
 	int32 MagazineSize = 30;
@@ -242,6 +288,7 @@ protected:
 
 	bool bCanFire = true;
 	bool bWantsToFire = false;
+	float FiringSpread = 0.0f;
 
 	FTimerHandle FireCooldownTimer;
 
@@ -249,5 +296,15 @@ private:
 	UFUNCTION()
 	void OnRep_CurrentAmmo();
 
+	UFUNCTION()
+	void OnRep_CurrentSpreadAngle();
+
 	void BroadcastAmmoChanged();
+	void BroadcastSpreadChanged();
+	void IncreaseSpreadForShot();
+	void UpdateSpread(float DeltaSeconds);
+	float CalculateStateSpread() const;
+	void SetCurrentSpreadAngle(float NewSpreadAngle);
+	float GetEffectiveMinSpreadAngle() const { return FMath::Max(0.0f, MinSpreadAngle); }
+	float GetEffectiveMaxSpreadAngle() const { return FMath::Max(GetEffectiveMinSpreadAngle(), MaxSpreadAngle); }
 };

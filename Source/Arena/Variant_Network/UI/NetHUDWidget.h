@@ -11,6 +11,7 @@ class ANetCharacter;
 class ANetGameState;
 class ANetPlayerStateBase;
 class UNetHealthComponent;
+class UWidget;
 
 /**
  * C++ binding layer for the network HUD. Blueprint implements the visual updates.
@@ -58,6 +59,11 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category="HUD|Weapon", meta=(DisplayName="Weapon Name Changed"))
 	void BP_OnWeaponNameChanged(const FText& WeaponName);
 
+	/** Updates crosshair size from the weapon's authoritative spread angle. */
+	UFUNCTION(BlueprintNativeEvent, Category="HUD|Weapon", meta=(DisplayName="Crosshair Spread Changed"))
+	void BP_OnCrosshairSpreadChanged(float SpreadAngle, float NormalizedSpread);
+	virtual void BP_OnCrosshairSpreadChanged_Implementation(float SpreadAngle, float NormalizedSpread);
+
 private:
 	/** Bind Function for Health Changed Event */
 	UFUNCTION()
@@ -85,6 +91,9 @@ private:
 	UFUNCTION()
 	void HandleWeaponHit(const FNetWeaponShotResult& ShotResult);
 
+	UFUNCTION()
+	void HandleSpreadChanged(float SpreadAngle, float NormalizedSpread);
+
 	/** Bind All Events to Data Sources */
 	void BindToDataSources();
 
@@ -100,8 +109,19 @@ private:
 	void RefreshVictoryState();
 	void RefreshAmmo();
 	void RefreshWeaponName();
+	void RefreshSpread();
 
 private:
+	/** Optional crosshair root scaled by the default spread presentation. */
+	UPROPERTY(BlueprintReadOnly, Category="HUD|Weapon", meta=(BindWidgetOptional, AllowPrivateAccess="true"))
+	TObjectPtr<UWidget> CrossHair;
+
+	UPROPERTY(EditDefaultsOnly, Category="HUD|Weapon", meta=(ClampMin=0))
+	float MinCrosshairScale = 1.0f;
+
+	UPROPERTY(EditDefaultsOnly, Category="HUD|Weapon", meta=(ClampMin=0))
+	float MaxCrosshairScale = 2.0f;
+
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ANetCharacter> ObservedCharacter;
 
