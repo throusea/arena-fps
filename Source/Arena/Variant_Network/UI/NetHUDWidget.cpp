@@ -24,13 +24,26 @@ void UNetHUDWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
+void UNetHUDWidget::NativeTick(const FGeometry& MyGeometry, float InDeltaTime)
+{
+	Super::NativeTick(MyGeometry, InDeltaTime);
+
+	if (const ANetWeaponBase* Rifle = ObservedRifle.Get(); Rifle && Rifle->IsReloading())
+	{
+		RefreshReload();
+	}
+}
+
 void UNetHUDWidget::RefreshHUD()
 {
 	BindToDataSources();
 	RefreshHealth();
 	RefreshScore();
+	RefreshPlayerName();
+	RefreshScoreboard();
 	RefreshVictoryState();
 	RefreshAmmo();
+	RefreshReload();
 	RefreshWeaponName();
 	RefreshSpread();
 }
@@ -46,8 +59,19 @@ void UNetHUDWidget::HandleScoreChanged(int32 NewScore)
 	BP_OnScoreChanged(NewScore);
 }
 
+void UNetHUDWidget::HandlePlayerNameChanged(const FString& NewPlayerName)
+{
+	BP_OnPlayerNameChanged(NewPlayerName);
+}
+
 void UNetHUDWidget::HandleVictoryStateChanged()
 {
+	RefreshVictoryState();
+}
+
+void UNetHUDWidget::HandleScoreboardChanged()
+{
+	RefreshScoreboard();
 	RefreshVictoryState();
 }
 
@@ -57,6 +81,7 @@ void UNetHUDWidget::HandleCurrentRifleChanged(ANetWeaponBase* CurrentRifle)
 
 	BindToRifle(CurrentRifle);
 	RefreshAmmo();
+	RefreshReload();
 	RefreshWeaponName();
 	RefreshSpread();
 }
@@ -64,6 +89,11 @@ void UNetHUDWidget::HandleCurrentRifleChanged(ANetWeaponBase* CurrentRifle)
 void UNetHUDWidget::HandleAmmoChanged(int32 CurrentAmmo, int32 MagazineSize)
 {
 	BP_OnAmmoChanged(CurrentAmmo, MagazineSize);
+}
+
+void UNetHUDWidget::HandleReloadStateChanged(bool bIsReloading)
+{
+	RefreshReload();
 }
 
 void UNetHUDWidget::HandleWeaponFired(const FNetWeaponFireResult& FireResult)
@@ -119,24 +149,27 @@ void UNetHUDWidget::UnbindFromDataSources()
 	if (ANetCharacter* Character = ObservedCharacter.Get())
 	{
 		Character->OnCurrentRifleChanged.RemoveDynamic(this, &UNetHUDWidget::HandleCurrentRifleChanged);
+		Character->OnWeaponHitConfirmed.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponHit);
 	}
 
 	if (ANetWeaponBase* Rifle = ObservedRifle.Get())
 	{
 		Rifle->OnAmmoChanged.RemoveDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
+		Rifle->OnReloadStateChanged.RemoveDynamic(this, &UNetHUDWidget::HandleReloadStateChanged);
 		Rifle->OnWeaponFired.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponFired);
-		Rifle->OnWeaponHit.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponHit);
 		Rifle->OnSpreadChanged.RemoveDynamic(this, &UNetHUDWidget::HandleSpreadChanged);
 	}
 
 	if (ANetPlayerStateBase* PlayerState = ObservedPlayerState.Get())
 	{
 		PlayerState->OnKillScoreChanged.RemoveDynamic(this, &UNetHUDWidget::HandleScoreChanged);
+		PlayerState->OnPlayerNameChanged.RemoveDynamic(this, &UNetHUDWidget::HandlePlayerNameChanged);
 	}
 
 	if (ANetGameState* GameState = ObservedGameState.Get())
 	{
 		GameState->OnVictoryStateChanged.RemoveDynamic(this, &UNetHUDWidget::HandleVictoryStateChanged);
+		GameState->OnScoreboardChanged.RemoveDynamic(this, &UNetHUDWidget::HandleScoreboardChanged);
 	}
 
 	ObservedCharacter.Reset();
@@ -161,6 +194,7 @@ void UNetHUDWidget::BindToCharacter(ANetCharacter* NewCharacter)
 	if (ANetCharacter* OldCharacter = ObservedCharacter.Get())
 	{
 		OldCharacter->OnCurrentRifleChanged.RemoveDynamic(this, &UNetHUDWidget::HandleCurrentRifleChanged);
+		OldCharacter->OnWeaponHitConfirmed.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponHit);
 	}
 
 	ObservedCharacter = NewCharacter;
@@ -181,6 +215,7 @@ void UNetHUDWidget::BindToCharacter(ANetCharacter* NewCharacter)
 	ObservedHealthComponent = HealthComponent;
 	HealthComponent->OnHealthChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleHealthChanged);
 	NewCharacter->OnCurrentRifleChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleCurrentRifleChanged);
+	NewCharacter->OnWeaponHitConfirmed.AddUniqueDynamic(this, &UNetHUDWidget::HandleWeaponHit);
 	BindToRifle(NewCharacter->GetCurrentRifle());
 }
 
@@ -194,8 +229,8 @@ void UNetHUDWidget::BindToRifle(ANetWeaponBase* NewRifle)
 	if (ANetWeaponBase* OldRifle = ObservedRifle.Get())
 	{
 		OldRifle->OnAmmoChanged.RemoveDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
+		OldRifle->OnReloadStateChanged.RemoveDynamic(this, &UNetHUDWidget::HandleReloadStateChanged);
 		OldRifle->OnWeaponFired.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponFired);
-		OldRifle->OnWeaponHit.RemoveDynamic(this, &UNetHUDWidget::HandleWeaponHit);
 		OldRifle->OnSpreadChanged.RemoveDynamic(this, &UNetHUDWidget::HandleSpreadChanged);
 	}
 
@@ -204,8 +239,8 @@ void UNetHUDWidget::BindToRifle(ANetWeaponBase* NewRifle)
 	if (NewRifle)
 	{
 		NewRifle->OnAmmoChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleAmmoChanged);
+		NewRifle->OnReloadStateChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleReloadStateChanged);
 		NewRifle->OnWeaponFired.AddUniqueDynamic(this, &UNetHUDWidget::HandleWeaponFired);
-		NewRifle->OnWeaponHit.AddUniqueDynamic(this, &UNetHUDWidget::HandleWeaponHit);
 		NewRifle->OnSpreadChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleSpreadChanged);
 	}
 }
@@ -220,6 +255,7 @@ void UNetHUDWidget::BindToPlayerState(ANetPlayerStateBase* NewPlayerState)
 	if (ANetPlayerStateBase* OldPlayerState = ObservedPlayerState.Get())
 	{
 		OldPlayerState->OnKillScoreChanged.RemoveDynamic(this, &UNetHUDWidget::HandleScoreChanged);
+		OldPlayerState->OnPlayerNameChanged.RemoveDynamic(this, &UNetHUDWidget::HandlePlayerNameChanged);
 	}
 
 	ObservedPlayerState = NewPlayerState;
@@ -227,6 +263,7 @@ void UNetHUDWidget::BindToPlayerState(ANetPlayerStateBase* NewPlayerState)
 	if (NewPlayerState)
 	{
 		NewPlayerState->OnKillScoreChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleScoreChanged);
+		NewPlayerState->OnPlayerNameChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandlePlayerNameChanged);
 	}
 }
 
@@ -240,6 +277,7 @@ void UNetHUDWidget::BindToGameState(ANetGameState* NewGameState)
 	if (ANetGameState* OldGameState = ObservedGameState.Get())
 	{
 		OldGameState->OnVictoryStateChanged.RemoveDynamic(this, &UNetHUDWidget::HandleVictoryStateChanged);
+		OldGameState->OnScoreboardChanged.RemoveDynamic(this, &UNetHUDWidget::HandleScoreboardChanged);
 	}
 
 	ObservedGameState = NewGameState;
@@ -247,6 +285,7 @@ void UNetHUDWidget::BindToGameState(ANetGameState* NewGameState)
 	if (NewGameState)
 	{
 		NewGameState->OnVictoryStateChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleVictoryStateChanged);
+		NewGameState->OnScoreboardChanged.AddUniqueDynamic(this, &UNetHUDWidget::HandleScoreboardChanged);
 	}
 }
 
@@ -265,12 +304,26 @@ void UNetHUDWidget::RefreshScore()
 	BP_OnScoreChanged(PlayerState ? PlayerState->GetKillScore() : 0);
 }
 
+void UNetHUDWidget::RefreshPlayerName()
+{
+	const ANetPlayerStateBase* PlayerState = ObservedPlayerState.Get();
+	BP_OnPlayerNameChanged(PlayerState ? PlayerState->GetPlayerName() : FString());
+}
+
+void UNetHUDWidget::RefreshScoreboard()
+{
+	const ANetGameState* GameState = ObservedGameState.Get();
+	BP_OnScoreboardChanged(GameState ? GameState->GetScoreboardEntries() : TArray<FNetScoreboardEntry>());
+}
+
 void UNetHUDWidget::RefreshVictoryState()
 {
 	const ANetGameState* GameState = ObservedGameState.Get();
+	ANetPlayerStateBase* WinnerPlayerState = GameState ? GameState->GetWinnerPlayerState() : nullptr;
 	BP_OnVictoryStateChanged(
 		GameState && GameState->HasWinner(),
-		GameState ? GameState->GetWinnerPlayerState() : nullptr
+		WinnerPlayerState,
+		WinnerPlayerState ? WinnerPlayerState->GetPlayerName() : FString()
 	);
 }
 
@@ -281,6 +334,15 @@ void UNetHUDWidget::RefreshAmmo()
 		Rifle ? Rifle->GetCurrentAmmo() : 0,
 		Rifle ? Rifle->GetMagazineSize() : 0
 	);
+}
+
+void UNetHUDWidget::RefreshReload()
+{
+	const ANetWeaponBase* Rifle = ObservedRifle.Get();
+	BP_OnReloadProgressChanged(
+		Rifle && Rifle->IsReloading(),
+		Rifle ? Rifle->GetReloadProgress() : 0.0f,
+		Rifle ? Rifle->GetReloadRemainingTime() : 0.0f);
 }
 
 void UNetHUDWidget::RefreshWeaponName()

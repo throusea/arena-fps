@@ -7,6 +7,7 @@
 #include "NetPlayerStateBase.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetPlayerScoreChangedSignature, int32, NewScore);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FNetPlayerNameChangedSignature, const FString&, NewPlayerName);
 
 /**
  *
@@ -26,6 +27,7 @@ public:
 
 public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void SetPlayerName(const FString& NewPlayerName) override;
 
 	/** Adds score on the authoritative instance. */
 	void AddKillScore(int32 ScoreDelta);
@@ -36,9 +38,14 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Score")
 	FNetPlayerScoreChangedSignature OnKillScoreChanged;
 
+	UPROPERTY(BlueprintAssignable, Category="Player")
+	FNetPlayerNameChangedSignature OnPlayerNameChanged;
+
 	// virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 
 protected:
+	virtual void OnRep_PlayerName() override;
+
 	UFUNCTION()
 	void OnRep_KillScore();
 

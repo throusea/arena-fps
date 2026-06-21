@@ -11,6 +11,7 @@
 #include "Arena.h"
 #include "Components/NetHealthComponent.h"
 #include "Net/UnrealNetwork.h"
+#include "NetGameMode.h"
 #include "Weapons/NetRifle.h"
 
 ANetCharacter::ANetCharacter()
@@ -75,9 +76,17 @@ void ANetCharacter::BeginPlay()
 
 void ANetCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (HasAuthority() && IsValid(CurrentRifle))
+	if (HasAuthority())
 	{
-		CurrentRifle->Destroy();
+		for (ANetWeaponBase* Weapon : OwnedWeapons)
+		{
+			if (IsValid(Weapon))
+			{
+				Weapon->Destroy();
+			}
+		}
+
+		OwnedWeapons.Reset();
 		CurrentRifle = nullptr;
 	}
 
@@ -141,6 +150,12 @@ void ANetCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputCompon
 		// Firing
 		EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Started, this, &ANetCharacter::DoStartFiring);
 		EnhancedInputComponent->BindAction(FireAction, ETriggerEvent::Completed, this, &ANetCharacter::DoStopFiring);
+
+		if (SwitchWeaponAction)
+		{
+			EnhancedInputComponent->BindAction(
+				SwitchWeaponAction, ETriggerEvent::Started, this, &ANetCharacter::DoSwitchWeapon);
+		}
 	}
 	else
 	{
@@ -249,6 +264,7 @@ void ANetCharacter::OnDeath()
 	}
 
 	GetCharacterMovement()->DisableMovement();
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 
 	if (IsLocallyControlled())
 	{
@@ -257,6 +273,31 @@ void ANetCharacter::OnDeath()
 	}
 
 	BP_OnDeath();
+
+	if (HasAuthority())
+	{
+		if (ANetGameMode* NetGameMode = GetWorld()->GetAuthGameMode<ANetGameMode>())
+		{
+			NetGameMode->RequestPlayerRespawn(GetController(), this);
+		}
+	}
+}
+
+void ANetCharacter::DoSwitchWeapon()
+{
+	if (IsDead())
+	{
+		return;
+	}
+
+	if (HasAuthority())
+	{
+		HandleSwitchWeapon();
+	}
+	else
+	{
+		ServerSwitchWeapon();
+	}
 }
 
 void ANetCharacter::ServerStartFiring_Implementation()
@@ -325,6 +366,14 @@ void ANetCharacter::UpdateWeaponHUD(int32 CurrentAmmo, int32 MagazineSize)
 	OnWeaponAmmoUpdated.Broadcast(CurrentAmmo, MagazineSize);
 }
 
+void ANetCharacter::ReportWeaponHitConfirmed(const FNetWeaponImpactResult& ImpactResult)
+{
+	if (ImpactResult.bDamagedActor)
+	{
+		OnWeaponHitConfirmed.Broadcast(ImpactResult);
+	}
+}
+
 FVector ANetCharacter::GetWeaponTargetLocation()
 {
 	FVector TraceStart;
@@ -356,7 +405,7 @@ void ANetCharacter::AddWeaponClass(const TSubclassOf<ANetWeaponBase>& WeaponClas
 		return;
 	}
 
-	if (!WeaponClass || (CurrentRifle && CurrentRifle->IsA(WeaponClass)))
+	if (!WeaponClass || FindWeaponOfType(WeaponClass))
 	{
 		return;
 	}
@@ -372,25 +421,16 @@ void ANetCharacter::AddWeaponClass(const TSubclassOf<ANetWeaponBase>& WeaponClas
 		return;
 	}
 
-	ANetWeaponBase* PreviousRifle = CurrentRifle;
-	CurrentRifle = AddedWeapon;
-	ForceNetUpdate();
-
-	if (IsValid(PreviousRifle))
-	{
-		PreviousRifle->StopFiringOnServer();
-		OnWeaponDeactivated(PreviousRifle);
-		PreviousRifle->Destroy();
-	}
-
-	// Authority does not receive the CurrentRifle RepNotify, so apply attachment locally as well.
-	ApplyCurrentRifle(nullptr);
+	OwnedWeapons.Add(AddedWeapon);
+	EquipWeapon(AddedWeapon);
 }
 
 void ANetCharacter::OnWeaponActivated(ANetWeaponBase* Weapon)
 {
 	if (IsValid(Weapon))
 	{
+		Weapon->SetActorHiddenInGame(false);
+
 		if (Weapon->GetFirstPersonAnimInstanceClass())
 		{
 			FirstPersonMesh->SetAnimInstanceClass(Weapon->GetFirstPersonAnimInstanceClass());
@@ -407,6 +447,10 @@ void ANetCharacter::OnWeaponActivated(ANetWeaponBase* Weapon)
 
 void ANetCharacter::OnWeaponDeactivated(ANetWeaponBase* Weapon)
 {
+	if (IsValid(Weapon))
+	{
+		Weapon->SetActorHiddenInGame(true);
+	}
 }
 
 void ANetCharacter::OnSemiWeaponRefire()
@@ -432,6 +476,46 @@ void ANetCharacter::ApplyCurrentRifle(ANetWeaponBase* PreviousRifle)
 	}
 }
 
+void ANetCharacter::EquipWeapon(ANetWeaponBase* NewWeapon)
+{
+	if (!HasAuthority() || !IsValid(NewWeapon) || NewWeapon == CurrentRifle
+		|| !OwnedWeapons.Contains(NewWeapon))
+	{
+		return;
+	}
+
+	ANetWeaponBase* PreviousRifle = CurrentRifle;
+	if (IsValid(PreviousRifle))
+	{
+		PreviousRifle->StopFiringOnServer();
+	}
+
+	CurrentRifle = NewWeapon;
+	ForceNetUpdate();
+
+	// Authority does not receive the CurrentRifle RepNotify.
+	ApplyCurrentRifle(PreviousRifle);
+}
+
+ANetWeaponBase* ANetCharacter::FindWeaponOfType(
+	const TSubclassOf<ANetWeaponBase>& WeaponClass) const
+{
+	if (!WeaponClass)
+	{
+		return nullptr;
+	}
+
+	for (ANetWeaponBase* Weapon : OwnedWeapons)
+	{
+		if (IsValid(Weapon) && Weapon->IsA(WeaponClass))
+		{
+			return Weapon;
+		}
+	}
+
+	return nullptr;
+}
+
 void ANetCharacter::ServerStopFiring_Implementation()
 {
 	HandleStopFiring();
@@ -445,6 +529,35 @@ void ANetCharacter::HandleStopFiring()
 	}
 }
 
+void ANetCharacter::ServerSwitchWeapon_Implementation()
+{
+	HandleSwitchWeapon();
+}
+
+void ANetCharacter::HandleSwitchWeapon()
+{
+	if (!HasAuthority() || IsDead() || OwnedWeapons.Num() < 2)
+	{
+		return;
+	}
+
+	OwnedWeapons.RemoveAll([](const ANetWeaponBase* Weapon)
+	{
+		return !IsValid(Weapon);
+	});
+
+	if (OwnedWeapons.Num() < 2)
+	{
+		return;
+	}
+
+	const int32 CurrentIndex = OwnedWeapons.IndexOfByKey(CurrentRifle);
+	const int32 NextIndex = CurrentIndex == INDEX_NONE
+		? 0
+		: (CurrentIndex + 1) % OwnedWeapons.Num();
+	EquipWeapon(OwnedWeapons[NextIndex]);
+}
+
 float ANetCharacter::TakeDamage(float Damage, FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser)
 {
 	const float AppliedDamage = Super::TakeDamage(Damage, DamageEvent, EventInstigator, DamageCauser);
@@ -454,7 +567,18 @@ float ANetCharacter::TakeDamage(float Damage, FDamageEvent const& DamageEvent, A
 		return AppliedDamage;
 	}
 
-	return HealthComponent->ApplyHealthDamage(Damage);
+	const bool bWasDead = HealthComponent->IsDead();
+	const float AppliedHealthDamage = HealthComponent->ApplyHealthDamage(Damage);
+
+	if (!bWasDead && HealthComponent->IsDead())
+	{
+		if (ANetGameMode* NetGameMode = GetWorld()->GetAuthGameMode<ANetGameMode>())
+		{
+			NetGameMode->NotifyPlayerKilled(this, EventInstigator);
+		}
+	}
+
+	return AppliedHealthDamage;
 }
 
 bool ANetCharacter::IsDead() const

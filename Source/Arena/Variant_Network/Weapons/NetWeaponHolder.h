@@ -8,6 +8,7 @@
 
 class ANetWeaponBase;
 class UAnimMontage;
+struct FNetWeaponImpactResult;
 
 UINTERFACE(MinimalAPI)
 class UNetWeaponHolder : public UInterface
@@ -25,6 +26,7 @@ public:
 	virtual void PlayFiringMontage(UAnimMontage* Montage) = 0;
 	virtual void AddWeaponRecoil(float Recoil) = 0;
 	virtual void UpdateWeaponHUD(int32 CurrentAmmo, int32 MagazineSize) = 0;
+	virtual void ReportWeaponHitConfirmed(const FNetWeaponImpactResult& ImpactResult) = 0;
 	virtual FVector GetWeaponTargetLocation() = 0;
 	virtual void AddWeaponClass(const TSubclassOf<ANetWeaponBase>& WeaponClass) = 0;
 	virtual void OnWeaponActivated(ANetWeaponBase* Weapon) = 0;

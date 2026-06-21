@@ -61,6 +61,12 @@ void ANetPlayerController::AcknowledgePossession(APawn* P)
 	RefreshHUDWidget();
 }
 
+void ANetPlayerController::OnRep_PlayerState()
+{
+	Super::OnRep_PlayerState();
+	RefreshHUDWidget();
+}
+
 void ANetPlayerController::SetupInputComponent()
 {
 	Super::SetupInputComponent();
