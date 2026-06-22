@@ -127,7 +127,7 @@ git lfs pull
 | 视角 | 鼠标 |
 | 跳跃 | `Space` |
 | 开火 | 鼠标左键 |
-| 切换武器 | `IA_SwapWeapon` 对应的 Enhanced Input 映射 |
+| 切换武器 | L Shift |
 
 具体输入映射位于 `Content/Input/` 与 `Content/Variant_Shooter/Input/`。
 
