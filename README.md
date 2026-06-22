@@ -17,7 +17,7 @@
 
 演示视频时长约 87 秒，展示本地 Dedicated Server 下的四人客户端运行效果。
 
-[![观看灰盒关卡演示](https://img.shields.io/badge/▶-观看四人联机演示-F18F3B)](output/Arena四人联机效果演示.mp4)
+[![观看灰盒关卡演示](https://img.shields.io/badge/▶-观看灰盒关卡演示-F18F3B)](output/Arena灰盒关卡演示.mp4)
 
 演示视频时长约 3 分 20 秒，展示本地 Dedicated Server 下的灰盒地图中运行效果。
 
