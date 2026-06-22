@@ -19,6 +19,17 @@ void ANetPlayerStateBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 	DOREPLIFETIME(ANetPlayerStateBase, KillScore);
 }
 
+void ANetPlayerStateBase::SetPlayerName(const FString& NewPlayerName)
+{
+	const FString PreviousPlayerName = GetPlayerName();
+	Super::SetPlayerName(NewPlayerName);
+
+	if (PreviousPlayerName != GetPlayerName())
+	{
+		OnPlayerNameChanged.Broadcast(GetPlayerName());
+	}
+}
+
 void ANetPlayerStateBase::AddKillScore(int32 ScoreDelta)
 {
 	if (!HasAuthority() || ScoreDelta <= 0)
@@ -34,6 +45,12 @@ void ANetPlayerStateBase::AddKillScore(int32 ScoreDelta)
 void ANetPlayerStateBase::OnRep_KillScore()
 {
 	OnKillScoreChanged.Broadcast(KillScore);
+}
+
+void ANetPlayerStateBase::OnRep_PlayerName()
+{
+	Super::OnRep_PlayerName();
+	OnPlayerNameChanged.Broadcast(GetPlayerName());
 }
 
 // UAbilitySystemComponent* ANetPlayerStateBase::GetAbilitySystemComponent() const

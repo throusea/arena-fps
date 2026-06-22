@@ -11,6 +11,7 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -54,6 +55,7 @@ void ANetWeaponBase::BeginPlay()
 	}
 
 	BroadcastAmmoChanged();
+	BroadcastReloadStateChanged();
 	BroadcastSpreadChanged();
 }
 
@@ -74,6 +76,7 @@ void ANetWeaponBase::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLi
 	DOREPLIFETIME(ANetWeaponBase, LastHitResult);
 	DOREPLIFETIME(ANetWeaponBase, MagazineSize);
 	DOREPLIFETIME(ANetWeaponBase, CurrentAmmo);
+	DOREPLIFETIME(ANetWeaponBase, ReloadState);
 	DOREPLIFETIME_CONDITION(ANetWeaponBase, CurrentSpreadAngle, COND_OwnerOnly);
 }
 
@@ -82,6 +85,7 @@ void ANetWeaponBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(FireCooldownTimer);
+		World->GetTimerManager().ClearTimer(ReloadTimer);
 	}
 
 	Super::EndPlay(EndPlayReason);
@@ -180,6 +184,11 @@ void ANetWeaponBase::MulticastPlayFireEffects_Implementation(const FNetWeaponFir
 
 void ANetWeaponBase::MulticastPlayHitEffects_Implementation(const FNetWeaponImpactResult& ImpactResult)
 {
+	if (HasAuthority() && ImpactResult.bDamagedActor)
+	{
+		ClientConfirmHit(ImpactResult);
+	}
+
 	if (ImpactSound)
 	{
 		UGameplayStatics::PlaySoundAtLocation(this, ImpactSound, ImpactResult.ImpactLocation);
@@ -189,10 +198,24 @@ void ANetWeaponBase::MulticastPlayHitEffects_Implementation(const FNetWeaponImpa
 	OnWeaponHit.Broadcast(ImpactResult);
 }
 
+void ANetWeaponBase::ClientConfirmHit_Implementation(const FNetWeaponImpactResult& ImpactResult)
+{
+	if (WeaponOwner)
+	{
+		WeaponOwner->ReportWeaponHitConfirmed(ImpactResult);
+	}
+}
+
 void ANetWeaponBase::FireOnServer()
 {
-	if (!bWantsToFire || !bCanFire || (bConsumeAmmo && CurrentAmmo <= 0) || !CanFireAuthoritativeShot())
+	if (!bWantsToFire || !bCanFire || ReloadState.bIsReloading || !CanFireAuthoritativeShot())
 	{
+		return;
+	}
+
+	if (bConsumeAmmo && CurrentAmmo <= 0)
+	{
+		StartReload();
 		return;
 	}
 
@@ -217,6 +240,11 @@ void ANetWeaponBase::FireOnServer()
 	{
 		CurrentAmmo = FMath::Max(0, CurrentAmmo - 1);
 		BroadcastAmmoChanged();
+
+		if (CurrentAmmo <= 0)
+		{
+			StartReload();
+		}
 	}
 
 	const float EffectiveCooldown = FMath::Max(FireCooldown, 0.01f);
@@ -329,7 +357,8 @@ bool ANetRifle::FireAuthoritativeShot(FNetWeaponFireResult& OutFireResult, FNetW
 		GEngine->AddOnScreenDebugMessage(7, 1.0f, bHit ? FColor::Red : FColor::Yellow, FString::Printf(TEXT("Server rifle fired. Hit: %s"), *HitActorName));
 	}
 
-	DrawDebugLine(GetWorld(), TraceStart, ShotEnd, bHit ? FColor::Red : FColor::Yellow, false, DebugTraceDuration, 0, 1.0f);
+	if (DebugTraceDuration > 0.0f)
+		DrawDebugLine(GetWorld(), TraceStart, ShotEnd, bHit ? FColor::Red : FColor::Yellow, false, DebugTraceDuration, 0, 1.0f);
 
 	return true;
 }
@@ -337,6 +366,11 @@ bool ANetRifle::FireAuthoritativeShot(FNetWeaponFireResult& OutFireResult, FNetW
 void ANetWeaponBase::OnRep_CurrentAmmo()
 {
 	BroadcastAmmoChanged();
+}
+
+void ANetWeaponBase::OnRep_ReloadState()
+{
+	BroadcastReloadStateChanged();
 }
 
 void ANetWeaponBase::OnRep_CurrentSpreadAngle()
@@ -353,6 +387,83 @@ void ANetWeaponBase::BroadcastAmmoChanged()
 	{
 		WeaponOwner->UpdateWeaponHUD(CurrentAmmo, MagazineSize);
 	}
+}
+
+void ANetWeaponBase::BroadcastReloadStateChanged()
+{
+	OnReloadStateChanged.Broadcast(ReloadState.bIsReloading);
+	BP_OnReloadStateChanged(ReloadState.bIsReloading);
+}
+
+void ANetWeaponBase::StartReload()
+{
+	if (!HasAuthority() || !bConsumeAmmo || ReloadState.bIsReloading || CurrentAmmo > 0)
+	{
+		return;
+	}
+
+	const float EffectiveReloadDuration = FMath::Max(ReloadDuration, 0.01f);
+	ReloadState.bIsReloading = true;
+	ReloadState.ReloadEndServerTime = GetSynchronizedWorldTime() + EffectiveReloadDuration;
+	BroadcastReloadStateChanged();
+	ForceNetUpdate();
+
+	GetWorldTimerManager().SetTimer(
+		ReloadTimer, this, &ANetWeaponBase::FinishReload, EffectiveReloadDuration, false);
+}
+
+void ANetWeaponBase::FinishReload()
+{
+	if (!HasAuthority() || !ReloadState.bIsReloading)
+	{
+		return;
+	}
+
+	CurrentAmmo = MagazineSize;
+	ReloadState.bIsReloading = false;
+	ReloadState.ReloadEndServerTime = 0.0f;
+	BroadcastAmmoChanged();
+	BroadcastReloadStateChanged();
+	ForceNetUpdate();
+
+	if (bWantsToFire && bFullAuto && bCanFire)
+	{
+		FireOnServer();
+	}
+}
+
+float ANetWeaponBase::GetReloadProgress() const
+{
+	if (!ReloadState.bIsReloading)
+	{
+		return 0.0f;
+	}
+
+	const float EffectiveReloadDuration = FMath::Max(ReloadDuration, 0.01f);
+	return FMath::Clamp(1.0f - (GetReloadRemainingTime() / EffectiveReloadDuration), 0.0f, 1.0f);
+}
+
+float ANetWeaponBase::GetReloadRemainingTime() const
+{
+	return ReloadState.bIsReloading
+		? FMath::Max(0.0f, ReloadState.ReloadEndServerTime - GetSynchronizedWorldTime())
+		: 0.0f;
+}
+
+float ANetWeaponBase::GetSynchronizedWorldTime() const
+{
+	const UWorld* World = GetWorld();
+	if (!World)
+	{
+		return 0.0f;
+	}
+
+	if (const AGameStateBase* GameState = World->GetGameState())
+	{
+		return GameState->GetServerWorldTimeSeconds();
+	}
+
+	return World->GetTimeSeconds();
 }
 
 float ANetWeaponBase::GetNormalizedSpread() const

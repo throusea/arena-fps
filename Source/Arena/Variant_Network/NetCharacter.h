@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
+#include "Weapons/NetRifle.h"
 #include "Weapons/NetWeaponHolder.h"
 #include "NetCharacter.generated.h"
 
@@ -68,6 +69,10 @@ protected:
 	UPROPERTY(EditAnywhere, Category ="Input")
 	UInputAction* FireAction;
 
+	/** Switch to the next owned weapon. */
+	UPROPERTY(EditAnywhere, Category="Input")
+	UInputAction* SwitchWeaponAction;
+
 	/** Rifle class spawned for this character */
 	UPROPERTY(EditAnywhere, Category="Weapon")
 	TSubclassOf<ANetWeaponBase> RifleClass;
@@ -91,6 +96,10 @@ protected:
 	/** Rifle currently owned by this character */
 	UPROPERTY(VisibleInstanceOnly, ReplicatedUsing=OnRep_CurrentRifle, Category="Weapon")
 	TObjectPtr<ANetWeaponBase> CurrentRifle;
+
+	/** Server-authoritative list of weapons collected by this character. */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ANetWeaponBase>> OwnedWeapons;
 
 public:
 	ANetCharacter();
@@ -153,12 +162,17 @@ protected:
 	/** Stops firing the equipped rifle */
 	void DoStopFiring();
 
+	/** Requests switching to the next owned weapon. */
+	UFUNCTION(BlueprintCallable, Category="Input")
+	void DoSwitchWeapon();
+
 public:
 	//~Begin INetWeaponHolder interface
 	virtual void AttachWeaponMeshes(ANetWeaponBase* Weapon) override;
 	virtual void PlayFiringMontage(UAnimMontage* Montage) override;
 	virtual void AddWeaponRecoil(float Recoil) override;
 	virtual void UpdateWeaponHUD(int32 CurrentAmmo, int32 MagazineSize) override;
+	virtual void ReportWeaponHitConfirmed(const FNetWeaponImpactResult& ImpactResult) override;
 	virtual FVector GetWeaponTargetLocation() override;
 
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category="Weapon")
@@ -180,6 +194,12 @@ public:
 	void ServerStopFiring();
 
 	void HandleStopFiring();
+
+	/** Server-side switch weapon request from the owning client. */
+	UFUNCTION(Server, Reliable)
+	void ServerSwitchWeapon();
+
+	void HandleSwitchWeapon();
 
 	/** Applies incoming engine damage to the health component. */
 	virtual float TakeDamage(float Damage, struct FDamageEvent const& DamageEvent, AController* EventInstigator, AActor* DamageCauser) override;
@@ -209,10 +229,16 @@ public:
 	UPROPERTY(BlueprintAssignable, Category="Weapon|Ammo")
 	FNetWeaponAmmoUpdatedSignature OnWeaponAmmoUpdated;
 
+	/** Reliable owner-only confirmation that one of this character's weapons dealt damage. */
+	UPROPERTY(BlueprintAssignable, Category="Weapon|Effects")
+	FNetWeaponHitSignature OnWeaponHitConfirmed;
+
 private:
 	UFUNCTION()
 	void OnRep_CurrentRifle(ANetWeaponBase* PreviousRifle);
 
 	void ApplyCurrentRifle(ANetWeaponBase* PreviousRifle);
+	void EquipWeapon(ANetWeaponBase* NewWeapon);
+	ANetWeaponBase* FindWeaponOfType(const TSubclassOf<ANetWeaponBase>& WeaponClass) const;
 
 };
